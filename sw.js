@@ -1,4 +1,4 @@
-const CACHE = 'transit-app-v1';
+const CACHE = 'transit-app-v2';
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'])).then(() => self.skipWaiting()));
 });
