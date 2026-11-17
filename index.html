@@ -1,0 +1,2441 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>乗換パターン v0（時刻なし）</title>
+  <style>
+:root {
+  --bg: #121417;
+  --panel: #1c1f24;
+  --panel2: #252a31;
+  --line: #333a43;
+  --text: #e6e8eb;
+  --muted: #9aa3ad;
+  --accent: #6cb6ff;
+  --warn: #ff8a7a;
+  --ok: #7ad69a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+header, main { max-width: 640px; margin: 0 auto; padding: 0 12px; }
+header { padding-top: 12px; }
+h1 { font-size: 1.25rem; margin: 0; }
+h1 small { font-size: 0.8rem; color: var(--muted); font-weight: normal; }
+h2 { font-size: 0.9rem; color: var(--muted); margin: 0 0 6px; font-weight: normal; }
+.lead { color: var(--muted); font-size: 0.85rem; margin: 4px 0 12px; }
+
+.od {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  /* 候補リストが出ると片側の列だけ伸びるので、上揃えにして反対側の入力欄が動かないようにする */
+  align-items: start;
+  background: var(--panel);
+  padding: 10px;
+  border-radius: 10px;
+}
+.field { display: flex; flex-direction: column; gap: 2px; font-size: 0.8rem; color: var(--muted); }
+select, input, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  min-height: 40px;
+}
+select, input { width: 100%; }
+input.invalid { border-color: var(--warn); }
+.od-error { color: var(--warn); font-size: 0.85rem; margin: 6px 0 0; }
+.od-error:empty { display: none; }
+#swap { width: 44px; font-size: 1.1rem; cursor: pointer; margin-top: calc(0.8rem * 1.5 + 2px); }
+/* 駅名の候補リスト：入力欄の直下に通常フローで出す（重ねない）。最大6件は app.js 側で切る */
+.sugg { list-style: none; margin: 2px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel2); overflow: hidden; }
+.sugg[hidden] { display: none; }
+.sugg li { padding: 6px 8px; font-size: 0.9rem; color: var(--text); cursor: pointer; }
+.sugg li + li { border-top: 1px solid var(--line); }
+.sugg li:active { background: var(--line); }
+
+/* 見合わせ欄：普段は畳む。summary 行に見合わせ中の路線数 */
+details.suspend { margin: 12px 0; font-size: 0.9rem; color: var(--muted); }
+details.suspend summary { padding: 4px 0; }
+details.suspend[open] summary { margin-bottom: 6px; }
+.toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.85rem;
+}
+.toggle input { margin: 0; }
+.toggle .chip { margin-right: 0; }
+/* 路線色チップ（小さい四角）。色は data.mjs の LINE_COLORS から inline style で入る */
+.chip { display: inline-block; width: 12px; height: 12px; border-radius: 2px; flex: none; vertical-align: -1px; margin-right: 4px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25); }
+.toggle.off { border-color: var(--warn); color: var(--warn); text-decoration: line-through; }
+
+.summary { color: var(--muted); font-size: 0.8rem; margin: 8px 0; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.rank { color: var(--muted); font-size: 0.85rem; }
+.cost { font-size: 1.3rem; font-weight: bold; }
+.cost small { font-size: 0.8rem; color: var(--muted); font-weight: normal; }
+.xfer { font-size: 0.85rem; color: var(--muted); }
+.base-cost { margin: 2px 0 0; font-size: 0.8rem; color: var(--muted); }
+
+.steps { list-style: none; margin: 8px 0; padding: 0; }
+.step { border-left: 3px solid var(--accent); padding: 4px 0 4px 10px; margin: 4px 0; }
+.step.walk { border-left: 3px dashed var(--muted); color: var(--muted); font-size: 0.85rem; }
+/* 鉄道 leg：左端に路線色の縦バー（leg の高さいっぱい）。コリドー leg は2路線の色のたてしまバー1本、
+   直通 leg は縦に2段（境界駅の位置で色が切り替わる）のバー1本 */
+.step.rail { display: flex; align-items: stretch; gap: 10px; border-left: none; padding-left: 0; }
+.step.rail .bars { display: flex; gap: 2px; flex: none; }
+.step.rail .bar { display: block; width: 8px; border-radius: 2px; }
+.step-body { flex: 1; min-width: 0; }
+.step .route { font-weight: bold; }
+/* 直通 leg の境界駅の注記（例：「目黒から南北線」） */
+.step .route .thru-note { font-weight: normal; font-size: 0.75rem; color: var(--muted); margin-left: 6px; }
+.step .ft { font-size: 1rem; }
+.step dl { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; margin: 2px 0 0; font-size: 0.82rem; }
+.step dt { color: var(--muted); }
+.step dd { margin: 0; }
+
+.deps { font-size: 0.8rem; color: var(--muted); }
+.deps .dep { display: inline-block; background: var(--panel2); border-radius: 6px; padding: 1px 6px; margin: 2px 2px 0 0; color: var(--text); }
+
+details { margin-top: 6px; font-size: 0.8rem; color: var(--muted); }
+details summary { cursor: pointer; }
+details li { margin: 2px 0; }
+
+.empty { color: var(--warn); padding: 12px; background: var(--panel); border-radius: 10px; }
+.boot-error { color: var(--muted); font-size: 0.85rem; }
+.boot-error.hidden { display: none; }
+code { background: var(--panel2); padding: 0 4px; border-radius: 4px; }
+
+.legend { color: var(--muted); font-size: 0.75rem; border-top: 1px solid var(--line); margin-top: 16px; padding: 8px 0 24px; }
+.legend p { margin: 4px 0; }
+
+/* JOB14：時刻（任意）と出発／到着の切替、カード上の便（モデル便） */
+.when { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--panel); padding: 8px 10px; border-radius: 10px; margin-top: 8px; font-size: 0.85rem; color: var(--muted); }
+.when input[type="time"] { width: auto; }
+.mode { display: flex; gap: 10px; }
+.mode label { display: flex; align-items: center; gap: 4px; color: var(--text); cursor: pointer; }
+.mode input { width: auto; min-height: auto; padding: 0; }
+.model-note { color: var(--muted); font-size: 0.75rem; margin: -4px 0 8px; }
+.model-note[hidden] { display: none; }
+.trip { background: var(--panel2); border-radius: 8px; padding: 6px 8px; margin: 6px 0; }
+.trip-total { font-weight: bold; }
+.trip-total small { font-weight: normal; color: var(--muted); margin-left: 4px; }
+.trip-legs { list-style: none; margin: 4px 0; padding: 0; font-size: 0.85rem; }
+.trip-legs li { padding: 2px 0; }
+.trip-sys { display: block; color: var(--muted); font-size: 0.75rem; }
+.trip-walk { color: var(--muted); }
+.trip-none { margin: 2px 0; color: var(--warn); }
+.trip-nav { display: flex; gap: 8px; }
+.trip-nav button { min-height: 32px; padding: 4px 10px; font-size: 0.8rem; cursor: pointer; }
+.trip-nav button:disabled { opacity: 0.4; cursor: default; }
+
+/* JOB15：データについて（事業者ごとの基準日） */
+details.about { margin: 12px 0 0; font-size: 0.8rem; color: var(--muted); }
+details.about summary { padding: 4px 0; }
+.freshness { list-style: none; padding: 0; margin: 4px 0; }
+.freshness li { margin: 2px 0; }
+.freshness .stale-hint { margin-left: 6px; color: var(--warn); }
+.about-model { margin: 6px 0 0; }
+</style>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#17181c">
+<link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+  <header>
+    <h1>乗換パターン <small>v0・時刻なし</small></h1>
+    <p class="lead">出発駅と到着駅だけで、主要な行き方を一通り並べます（便検索ではありません）。</p>
+  </header>
+
+  <main>
+    <section class="od" aria-label="出発駅と到着駅">
+      <div class="field">
+        <label for="origin">出発</label>
+        <input id="origin" type="text" autocomplete="off" placeholder="駅名を入力" enterkeyhint="search" aria-controls="origin-sugg">
+        <ul id="origin-sugg" class="sugg" role="listbox" aria-label="出発駅の候補" hidden></ul>
+      </div>
+      <button id="swap" type="button" aria-label="出発と到着を入れ替え">⇅</button>
+      <div class="field">
+        <label for="dest">到着</label>
+        <input id="dest" type="text" autocomplete="off" placeholder="駅名を入力" enterkeyhint="search" aria-controls="dest-sugg">
+        <ul id="dest-sugg" class="sugg" role="listbox" aria-label="到着駅の候補" hidden></ul>
+      </div>
+    </section>
+    <p id="od-error" class="od-error" role="alert"></p>
+
+    <!-- JOB14：時刻（任意）。空なら従来のパターン表示のまま -->
+    <section class="when" aria-label="時刻（任意）">
+      <label for="time">時刻</label>
+      <input id="time" type="time" aria-describedby="model-note">
+      <div class="mode" role="radiogroup" aria-label="出発または到着">
+        <label><input id="mode-dep" type="radio" name="tmode" value="dep" checked> 出発</label>
+        <label><input id="mode-arr" type="radio" name="tmode" value="arr"> 到着</label>
+      </div>
+    </section>
+
+    <details id="suspend" class="suspend" aria-label="運転見合わせ">
+      <summary id="suspend-summary">見合わせ路線（なし）</summary>
+      <div id="toggles" class="toggles"></div>
+    </details>
+
+    <p id="summary" class="summary"></p>
+    <p id="model-note" class="model-note" hidden></p>
+    <div id="results"></div>
+
+    <p id="boot-error" class="boot-error">
+      読み込み中…。表示が変わらない場合、このブラウザでは JavaScript が無効か、対応していません。
+    </p>
+
+    <!-- JOB15：データについて（事業者ごとの基準日・モデル便の注記・鮮度ヒント） -->
+    <details id="about" class="about">
+      <summary>データについて</summary>
+      <ul id="freshness" class="freshness"></ul>
+      <p id="about-model" class="about-model"></p>
+    </details>
+
+    <footer class="legend">
+      <p>所要目安＝乗車（種別集合の最速）＋待ち（合算間隔÷2）＋同一駅乗換 4分（徒歩連絡は徒歩分）。括弧内は最遅種別で乗った場合。</p>
+      <p>直通（乗り入れ）は1本の区間として数え、境界駅では乗換・待ちを足しません。色バーは境界駅の位置で上下2色に切り替わります（たてしまは「どちらの路線でも可」の区間）。</p>
+      <p>種別の「※」は日中運行なし（合算間隔に入れない）。運賃は v0 の対象外です。両数は系統ごとの目安で、当日の編成は JR東日本アプリ等で確認してください。</p>
+    </footer>
+  </main>
+
+  <script>
+(() => {
+'use strict';
+// ---- data.mjs ----
+// 乗換案内 v0 のネットワークデータ（JOB.md「データ」節をそのまま転記）
+// 所要分は各系統の起点からの累積分（概算）。正確さは v0 の対象外。
+
+// 停車駅文字列 "千葉0 稲毛3 ..." を [{station, t}] に変換する
+function parseStops(text) {
+  return text.trim().split(/\s+/).map((tok) => {
+    const m = tok.match(/^(.+?)(\d+)$/);
+    if (!m) throw new Error(`停車駅の書式が不正: ${tok}`);
+    return { station: m[1], t: Number(m[2]) };
+  });
+}
+
+// 区間ごとの停車駅文字列（各区間は 0 起点、先頭駅は直前区間の末尾駅）をつないで1本の累積にする（JOB4 の延伸用）
+function chainStops(...texts) {
+  const out = [];
+  for (const text of texts) {
+    const seg = parseStops(text);
+    if (!out.length) { out.push(...seg); continue; }
+    const last = out[out.length - 1];
+    if (seg[0].station !== last.station || seg[0].t !== 0) throw new Error(`区間のつなぎ目が不正: ${last.station} / ${seg[0].station}`);
+    for (const x of seg.slice(1)) out.push({ station: x.station, t: last.t + x.t });
+  }
+  return out;
+}
+
+const KEISEI_TOKKYU_STOPS =
+  '京成上野0 日暮里4 青砥12 京成高砂17 京成小岩21 江戸川24 国府台27 市川真間29 京成八幡32 東中山35 京成船橋38 船橋競馬場41 京成津田沼46 京成佐倉66 京成成田76';
+
+// 通勤特急：特急と同じ停車駅、累積は各+1分。
+// 起点（京成上野）は累積の定義上 0 のまま据え置き、2駅目以降を +1 とする解釈。
+const keiseiTsukinStops = parseStops(KEISEI_TOKKYU_STOPS).map((s, i) => ({
+  station: s.station,
+  t: i === 0 ? 0 : s.t + 1,
+}));
+
+const KEIHIN_NORTH = '大宮0 さいたま新都心2 与野4 北浦和6 浦和8 南浦和11 蕨14 西川口17 川口19 赤羽22';
+const KEIHIN_SOUTH = '横浜0 桜木町3 関内5 石川町7 山手10 根岸13 磯子16 新杉田18 洋光台22 港南台24 本郷台27 大船31';
+
+// JOB4：JR 中距離線の共通区間（各区間は 0 起点。chainStops でつなぐ）
+const UENO_OMIYA = '上野0 尾久4 赤羽10 浦和19 さいたま新都心23 大宮26';
+const UTSUNOMIYA_NORTH = '大宮0 土呂3 東大宮6 蓮田10 白岡14 新白岡17 久喜21 東鷲宮24 栗橋28 古河33 野木37 間々田41 小山46 小金井51 自治医大55 石橋59 雀宮63 宇都宮68';
+const TAKASAKI_NORTH = '大宮0 宮原4 上尾8 北上尾11 桶川14 北本18 鴻巣22 北鴻巣26 吹上29 行田33 熊谷38 籠原43 深谷48 岡部52 本庄57 神保原61 新町65 倉賀野70 高崎74';
+const TOKAIDO_ODAWARA_YOKOHAMA = '小田原0 鴨宮4 国府津7 二宮12 大磯16 平塚20 茅ケ崎26 辻堂30 藤沢34 大船39 戸塚44 横浜54';
+// 上野東京ライン：横浜〜東京〜上野〜大宮（東海道線内は各駅、上野〜大宮は尾久経由・さいたま新都心停車）
+const UT_YOKOHAMA_OMIYA = '横浜0 川崎8 品川18 新橋23 東京26 上野33 尾久37 赤羽43 浦和52 さいたま新都心56 大宮59';
+// 湘南新宿ライン：大崎〜渋谷〜新宿〜池袋〜大宮（各系統共通の停車駅）
+const SS_OSAKI_OMIYA = '大崎0 恵比寿5 渋谷7 新宿12 池袋18 赤羽27 浦和35 大宮43';
+
+const SYSTEMS = [
+  {
+    id: 'sobu-rapid', route: 'sobu-rapid', routeName: 'JR総武快速線', type: '快速', tier: 'yuto', interval: 12, daytime: true,
+    stops: parseStops('千葉0 稲毛3 津田沼9 船橋15 市川21 新小岩27 錦糸町32 馬喰町36 新日本橋38 東京41 新橋44 品川49'),
+  },
+  {
+    id: 'sobu-local', route: 'sobu-local', routeName: 'JR中央・総武線各駅停車', type: '各駅停車', tier: 'local', interval: 6, daytime: true,
+    stops: parseStops('千葉0 西千葉3 新検見川6 幕張9 幕張本郷12 津田沼16 東船橋19 船橋22 西船橋25 下総中山28 本八幡31 市川34 小岩38 新小岩42 平井45 亀戸48 錦糸町51 両国54 浅草橋56 秋葉原58 御茶ノ水61 水道橋63 飯田橋66 市ヶ谷69 四ツ谷72 信濃町75 千駄ヶ谷77 代々木79 新宿82'),
+  },
+  {
+    id: 'chuo-rapid', route: 'chuo', routeName: 'JR中央線', type: '快速', tier: 'yuto', interval: 6, daytime: true,
+    stops: parseStops('東京0 神田2 御茶ノ水4 四ツ谷8 新宿13 中野17 高円寺20 阿佐ケ谷22 荻窪25 西荻窪28 吉祥寺31 三鷹35 武蔵境37 東小金井40 武蔵小金井42 国分寺45 西国分寺47 国立49 立川52 日野56 豊田59 八王子63 西八王子66 高尾70'),
+  },
+  {
+    id: 'chuo-tokkai', route: 'chuo', routeName: 'JR中央線', type: '中央特快', tier: 'yuto', interval: 30, daytime: false,
+    stops: parseStops('東京0 神田2 御茶ノ水4 四ツ谷8 新宿12 中野16 吉祥寺29 三鷹33 国分寺38 立川47 日野51 豊田54 八王子58 西八王子61 高尾64'),
+  },
+  {
+    // 末尾の東京は環状の閉じ（駅としては同一）。ring=true でグラフ上も東京で閉じる
+    id: 'yamanote', route: 'yamanote', routeName: 'JR山手線', type: '各駅停車', tier: 'local', interval: 4, daytime: true, ring: true,
+    stops: parseStops('東京0 神田2 秋葉原4 御徒町6 上野8 鶯谷10 日暮里12 西日暮里14 田端16 駒込19 巣鴨21 大塚23 池袋26 目白28 高田馬場30 新大久保32 新宿34 代々木36 原宿38 渋谷41 恵比寿43 目黒45 五反田47 大崎49 品川52 高輪ゲートウェイ54 田町56 浜松町58 新橋61 有楽町63 東京65'),
+  },
+  {
+    id: 'keihin-local', route: 'keihin', routeName: 'JR京浜東北線', type: '各駅停車', tier: 'local', interval: 6, daytime: true,
+    // JOB4：大宮〜赤羽・横浜〜大船を延伸（赤羽〜横浜は v0 のまま）
+    stops: chainStops(KEIHIN_NORTH, '赤羽0 東十条4 王子6 上中里8 田端10 西日暮里13 日暮里15 鶯谷17 上野19 御徒町21 秋葉原23 神田25 東京27 有楽町29 新橋31 浜松町33 田町36 高輪ゲートウェイ38 品川40 大井町43 大森47 蒲田51 川崎57 鶴見61 新子安65 東神奈川68 横浜70', KEIHIN_SOUTH),
+  },
+  {
+    id: 'keihin-rapid', route: 'keihin', routeName: 'JR京浜東北線', type: '快速', tier: 'yuto', interval: 12, daytime: true, note: '日中のみ',
+    // 快速運転は田端〜浜松町のみ。延伸区間は各駅に停まる（所要は各停と同じとした）
+    stops: chainStops(KEIHIN_NORTH, '赤羽0 王子5 田端9 日暮里13 上野17 秋葉原21 東京25 新橋29 浜松町31 田町34 品川38 大井町41 大森45 蒲田49 川崎55 横浜66', KEIHIN_SOUTH),
+  },
+  {
+    id: 'keisei-kaitoku', route: 'keisei', routeName: '京成本線', type: '快速特急', tier: 'yuto', interval: 40, daytime: true,
+    stops: parseStops('京成上野0 日暮里4 青砥11 京成高砂15 京成船橋31 京成佐倉48 京成成田58'),
+  },
+  {
+    id: 'keisei-tokkyu', route: 'keisei', routeName: '京成本線', type: '特急', tier: 'yuto', interval: 40, daytime: true,
+    stops: parseStops(KEISEI_TOKKYU_STOPS),
+  },
+  {
+    id: 'keisei-tsukin', route: 'keisei', routeName: '京成本線', type: '通勤特急', tier: 'yuto', interval: 60, daytime: false,
+    stops: keiseiTsukinStops,
+  },
+  {
+    id: 'keisei-rapid', route: 'keisei', routeName: '京成本線', type: '快速', tier: 'yuto', interval: 20, daytime: true,
+    stops: parseStops('京成上野0 日暮里4 新三河島6 町屋8 千住大橋10 関屋12 堀切菖蒲園14 お花茶屋16 青砥18 京成高砂22 京成小岩25 江戸川27 国府台30 市川真間32 菅野34 京成八幡36 鬼越38 京成中山40 東中山42 京成西船44 海神46 京成船橋48'),
+  },
+  {
+    id: 'keisei-local', route: 'keisei', routeName: '京成本線', type: '普通', tier: 'local', interval: 10, daytime: true,
+    stops: parseStops('京成上野0 日暮里5 新三河島7 町屋10 千住大橋13 関屋15 堀切菖蒲園17 お花茶屋20 青砥23 京成高砂27 京成小岩31 江戸川34 国府台37 市川真間39 菅野41 京成八幡44 鬼越46 京成中山48 東中山51 京成西船53 海神56 京成船橋58 大神宮下60 船橋競馬場62'),
+  },
+  {
+    id: 'tozai-rapid', route: 'tozai', routeName: '東京メトロ東西線', type: '快速', tier: 'yuto', interval: 12, daytime: true,
+    stops: parseStops('西船橋0 浦安9 東陽町15 木場17 門前仲町19 茅場町22 日本橋24 大手町26 竹橋28 九段下30 飯田橋32 神楽坂34 早稲田36 高田馬場39 落合41 中野43'),
+  },
+  {
+    id: 'tozai-tsukin', route: 'tozai', routeName: '東京メトロ東西線', type: '通勤快速', tier: 'yuto', interval: 30, daytime: false, note: '平日朝のみ',
+    stops: parseStops('西船橋0 原木中山2 妙典5 行徳7 南行徳9 浦安12 東陽町19 木場21 門前仲町23 茅場町26 日本橋28 大手町30 竹橋32 九段下34 飯田橋36 神楽坂38 早稲田40 高田馬場43 落合45 中野47'),
+  },
+  {
+    id: 'tozai-local', route: 'tozai', routeName: '東京メトロ東西線', type: '各駅停車', tier: 'local', interval: 5, daytime: true,
+    stops: parseStops('西船橋0 原木中山2 妙典4 行徳7 南行徳9 浦安12 葛西15 西葛西17 南砂町20 東陽町23 木場25 門前仲町27 茅場町30 日本橋32 大手町34 竹橋36 九段下38 飯田橋40 神楽坂42 早稲田44 高田馬場47 落合49 中野51'),
+  },
+  // ---- JOB4：東京メトロ（東西線は v0 のまま上）。所要・間隔は日中の概算 ----
+  {
+    id: 'ginza', route: 'ginza', routeName: '東京メトロ銀座線', type: '各駅停車', tier: 'local', interval: 3, daytime: true,
+    stops: parseStops('浅草0 田原町2 稲荷町3 上野5 上野広小路7 末広町8 神田10 三越前12 日本橋13 京橋15 銀座16 新橋18 虎ノ門20 溜池山王22 赤坂見附23 青山一丁目25 外苑前27 表参道28 渋谷31'),
+  },
+  {
+    id: 'marunouchi', route: 'marunouchi', routeName: '東京メトロ丸ノ内線', type: '各駅停車', tier: 'local', interval: 4, daytime: true,
+    stops: parseStops('池袋0 新大塚2 茗荷谷4 後楽園7 本郷三丁目9 御茶ノ水11 淡路町13 大手町15 東京16 銀座18 霞ケ関20 国会議事堂前22 赤坂見附23 四ツ谷25 四谷三丁目27 新宿御苑前29 新宿三丁目30 新宿32 西新宿34 中野坂上36 新中野38 東高円寺40 新高円寺41 南阿佐ケ谷43 荻窪46'),
+  },
+  {
+    // 方南町支線は池袋直通の系統として持つ（leg の両端が1系統に載るように。支線内の折返し便は別に持たない）
+    id: 'marunouchi-honancho', route: 'marunouchi', routeName: '東京メトロ丸ノ内線', type: '各駅停車（方南町支線直通）', tier: 'local', interval: 12, daytime: true,
+    stops: parseStops('池袋0 新大塚2 茗荷谷4 後楽園7 本郷三丁目9 御茶ノ水11 淡路町13 大手町15 東京16 銀座18 霞ケ関20 国会議事堂前22 赤坂見附23 四ツ谷25 四谷三丁目27 新宿御苑前29 新宿三丁目30 新宿32 西新宿34 中野坂上36 中野新橋38 中野富士見町39 方南町41'),
+  },
+  {
+    id: 'hibiya', route: 'hibiya', routeName: '東京メトロ日比谷線', type: '各駅停車', tier: 'local', interval: 5, daytime: true,
+    stops: parseStops('北千住0 南千住3 三ノ輪5 入谷7 上野9 仲御徒町11 秋葉原13 小伝馬町15 人形町17 茅場町19 八丁堀21 築地23 東銀座25 銀座27 日比谷28 霞ケ関30 虎ノ門ヒルズ32 神谷町33 六本木36 広尾38 恵比寿41 中目黒43'),
+  },
+  {
+    id: 'chiyoda', route: 'chiyoda', routeName: '東京メトロ千代田線', type: '各駅停車', tier: 'local', interval: 5, daytime: true,
+    stops: parseStops('代々木上原0 代々木公園2 明治神宮前4 表参道5 乃木坂7 赤坂9 国会議事堂前11 霞ケ関12 日比谷14 二重橋前15 大手町16 新御茶ノ水18 湯島20 根津22 千駄木24 西日暮里26 町屋28 北千住31 綾瀬35'),
+  },
+  {
+    id: 'chiyoda-kitaayase', route: 'chiyoda', routeName: '東京メトロ千代田線', type: '各駅停車（北綾瀬支線）', tier: 'local', interval: 10, daytime: true,
+    stops: parseStops('綾瀬0 北綾瀬3'),
+  },
+  {
+    // 支線から本線へ乗り通す leg 用（実際の直通は朝夕の一部のみ）
+    id: 'chiyoda-kitaayase-thru', route: 'chiyoda', routeName: '東京メトロ千代田線', type: '各駅停車（北綾瀬直通）', tier: 'local', interval: 60, daytime: false,
+    stops: parseStops('代々木上原0 代々木公園2 明治神宮前4 表参道5 乃木坂7 赤坂9 国会議事堂前11 霞ケ関12 日比谷14 二重橋前15 大手町16 新御茶ノ水18 湯島20 根津22 千駄木24 西日暮里26 町屋28 北千住31 綾瀬35 北綾瀬38'),
+  },
+  {
+    id: 'yurakucho', route: 'yurakucho', routeName: '東京メトロ有楽町線', type: '各駅停車', tier: 'local', interval: 6, daytime: true,
+    stops: parseStops('和光市0 地下鉄成増3 地下鉄赤塚5 平和台7 氷川台9 小竹向原12 千川14 要町16 池袋18 東池袋20 護国寺22 江戸川橋24 飯田橋27 市ヶ谷29 麹町31 永田町33 桜田門35 有楽町37 銀座一丁目38 新富町40 月島42 豊洲45 辰巳47 新木場49'),
+  },
+  {
+    id: 'hanzomon', route: 'hanzomon', routeName: '東京メトロ半蔵門線', type: '各駅停車', tier: 'local', interval: 5, daytime: true,
+    stops: parseStops('渋谷0 表参道2 青山一丁目4 永田町6 半蔵門8 九段下11 神保町12 大手町15 三越前17 水天宮前19 清澄白河22 住吉25 錦糸町27 押上29'),
+  },
+  {
+    id: 'namboku', route: 'namboku', routeName: '東京メトロ南北線', type: '各駅停車', tier: 'local', interval: 6, daytime: true,
+    stops: parseStops('目黒0 白金台2 白金高輪4 麻布十番6 六本木一丁目8 溜池山王10 永田町12 四ツ谷14 市ヶ谷16 飯田橋18 後楽園21 東大前23 本駒込25 駒込27 西ケ原29 王子31 王子神谷33 志茂35 赤羽岩淵37'),
+  },
+  {
+    id: 'fukutoshin-local', route: 'fukutoshin', routeName: '東京メトロ副都心線', type: '各駅停車', tier: 'local', interval: 7, daytime: true,
+    stops: parseStops('和光市0 地下鉄成増3 地下鉄赤塚5 平和台7 氷川台9 小竹向原12 千川14 要町16 池袋18 雑司が谷20 西早稲田22 東新宿24 新宿三丁目26 北参道28 明治神宮前30 渋谷33'),
+  },
+  {
+    id: 'fukutoshin-express', route: 'fukutoshin', routeName: '東京メトロ副都心線', type: '急行', tier: 'yuto', interval: 15, daytime: true,
+    stops: parseStops('和光市0 小竹向原9 池袋14 新宿三丁目20 明治神宮前23 渋谷26'),
+  },
+  // ---- JOB4：都営地下鉄 ----
+  {
+    id: 'asakusa', route: 'asakusa', routeName: '都営浅草線', type: '各駅停車', tier: 'local', interval: 6, daytime: true,
+    stops: parseStops('西馬込0 馬込2 中延4 戸越6 五反田8 高輪台10 泉岳寺12 三田14 大門16 新橋18 東銀座20 宝町22 日本橋23 人形町25 東日本橋27 浅草橋28 蔵前30 浅草32 本所吾妻橋34 押上36'),
+  },
+  {
+    id: 'mita', route: 'mita', routeName: '都営三田線', type: '各駅停車', tier: 'local', interval: 6, daytime: true,
+    stops: parseStops('目黒0 白金台2 白金高輪4 三田7 芝公園9 御成門10 内幸町12 日比谷14 大手町16 神保町18 水道橋20 春日22 白山24 千石26 巣鴨28 西巣鴨30 新板橋32 板橋区役所前34 板橋本町36 本蓮沼38 志村坂上40 志村三丁目42 蓮根44 西台46 高島平48 新高島平49 西高島平51'),
+  },
+  {
+    id: 'shinjuku-local', route: 'shinjuku', routeName: '都営新宿線', type: '各駅停車', tier: 'local', interval: 8, daytime: true,
+    stops: parseStops('新宿0 新宿三丁目2 曙橋4 市ヶ谷6 九段下9 神保町10 小川町12 岩本町14 馬喰横山16 浜町18 森下20 菊川22 住吉24 西大島26 大島28 東大島30 船堀33 一之江36 瑞江38 篠崎41 本八幡44'),
+  },
+  {
+    id: 'shinjuku-express', route: 'shinjuku', routeName: '都営新宿線', type: '急行', tier: 'yuto', interval: 20, daytime: true,
+    stops: parseStops('新宿0 市ヶ谷5 九段下8 神保町9 岩本町12 馬喰横山14 森下17 大島22 船堀25 瑞江29 本八幡33'),
+  },
+  {
+    // 光が丘から都庁前・飯田橋・両国・大門・六本木を回って新宿まで（実際の運転どおり都庁前→新宿西口の向きで1本）。
+    // 新宿→都庁前の1駅（環状部の閉じ）は持たない：持つと同じ系統内で遠回りの所要が付くため
+    id: 'oedo', route: 'oedo', routeName: '都営大江戸線', type: '各駅停車', tier: 'local', interval: 5, daytime: true,
+    stops: parseStops('光が丘0 練馬春日町2 豊島園4 練馬6 新江古田9 落合南長崎11 中井13 東中野15 中野坂上17 西新宿五丁目19 都庁前21 新宿西口23 東新宿25 若松河田27 牛込柳町29 牛込神楽坂31 飯田橋33 春日35 本郷三丁目37 上野御徒町39 新御徒町41 蔵前43 両国45 森下47 清澄白河49 門前仲町51 月島53 勝どき55 築地市場57 汐留59 大門61 赤羽橋63 麻布十番65 六本木67 青山一丁目70 国立競技場72 代々木74 新宿76'),
+  },
+  // ---- JOB4：東急 ----
+  {
+    id: 'toyoko-local', route: 'toyoko', routeName: '東急東横線', type: '各駅停車', tier: 'local', interval: 8, daytime: true,
+    stops: parseStops('渋谷0 代官山2 中目黒4 祐天寺6 学芸大学8 都立大学10 自由が丘13 田園調布15 多摩川17 新丸子19 武蔵小杉21 元住吉23 日吉26 綱島29 大倉山31 菊名34 妙蓮寺36 白楽38 東白楽40 反町42 横浜44'),
+  },
+  {
+    id: 'toyoko-express', route: 'toyoko', routeName: '東急東横線', type: '急行', tier: 'yuto', interval: 15, daytime: true,
+    stops: parseStops('渋谷0 中目黒3 学芸大学6 自由が丘10 田園調布12 多摩川14 武蔵小杉17 日吉20 綱島23 菊名26 横浜32'),
+  },
+  {
+    id: 'toyoko-ltd', route: 'toyoko', routeName: '東急東横線', type: '特急', tier: 'yuto', interval: 15, daytime: true,
+    stops: parseStops('渋谷0 中目黒3 自由が丘9 武蔵小杉15 菊名22 横浜27'),
+  },
+  {
+    id: 'toyoko-commuter', route: 'toyoko', routeName: '東急東横線', type: '通勤特急', tier: 'yuto', interval: 30, daytime: false, note: '平日朝夕のみ',
+    stops: parseStops('渋谷0 中目黒3 自由が丘9 武蔵小杉15 日吉18 綱島21 菊名24 横浜29'),
+  },
+  {
+    id: 'dento-local', route: 'dento', routeName: '東急田園都市線', type: '各駅停車', tier: 'local', interval: 10, daytime: true,
+    stops: parseStops('渋谷0 池尻大橋3 三軒茶屋5 駒沢大学8 桜新町10 用賀12 二子玉川15 二子新地17 高津18 溝の口20 梶が谷22 宮崎台24 宮前平26 鷺沼28 たまプラーザ31 あざみ野33 江田35 市が尾37 藤が丘39 青葉台41 田奈43 長津田46 つくし野48 すずかけ台50 南町田グランベリーパーク52 つきみ野54 中央林間57'),
+  },
+  {
+    id: 'dento-express', route: 'dento', routeName: '東急田園都市線', type: '急行', tier: 'yuto', interval: 10, daytime: true,
+    stops: parseStops('渋谷0 三軒茶屋4 二子玉川11 溝の口14 鷺沼19 たまプラーザ21 あざみ野23 青葉台28 長津田32 つくし野34 すずかけ台36 南町田グランベリーパーク38 つきみ野40 中央林間43'),
+  },
+  {
+    id: 'meguro-local', route: 'meguro', routeName: '東急目黒線', type: '各駅停車', tier: 'local', interval: 10, daytime: true,
+    stops: parseStops('目黒0 不動前2 武蔵小山4 西小山6 洗足7 大岡山9 奥沢11 田園調布13 多摩川15 新丸子17 武蔵小杉19 元住吉21 日吉24'),
+  },
+  {
+    id: 'meguro-express', route: 'meguro', routeName: '東急目黒線', type: '急行', tier: 'yuto', interval: 15, daytime: true,
+    stops: parseStops('目黒0 武蔵小山3 大岡山6 田園調布9 多摩川11 武蔵小杉14 日吉18'),
+  },
+  {
+    id: 'oimachi-local', route: 'oimachi', routeName: '東急大井町線', type: '各駅停車', tier: 'local', interval: 10, daytime: true,
+    stops: parseStops('大井町0 下神明2 戸越公園4 中延6 荏原町7 旗の台9 北千束11 大岡山12 緑が丘14 自由が丘16 九品仏18 尾山台20 等々力22 上野毛24 二子玉川27 二子新地29 高津30 溝の口32'),
+  },
+  {
+    id: 'oimachi-express', route: 'oimachi', routeName: '東急大井町線', type: '急行', tier: 'yuto', interval: 15, daytime: true,
+    stops: parseStops('大井町0 旗の台6 大岡山8 自由が丘11 二子玉川18 溝の口21'),
+  },
+  {
+    id: 'ikegami', route: 'ikegami', routeName: '東急池上線', type: '各駅停車', tier: 'local', interval: 6, daytime: true,
+    stops: parseStops('五反田0 大崎広小路1 戸越銀座3 荏原中延5 旗の台7 長原9 洗足池10 石川台12 雪が谷大塚13 御嶽山15 久が原17 千鳥町18 池上20 蓮沼22 蒲田24'),
+  },
+  {
+    id: 'tamagawa', route: 'tamagawa', routeName: '東急多摩川線', type: '各駅停車', tier: 'local', interval: 6, daytime: true,
+    stops: parseStops('多摩川0 沼部2 鵜の木4 下丸子6 武蔵新田8 矢口渡10 蒲田13'),
+  },
+  {
+    id: 'setagaya', route: 'setagaya', routeName: '東急世田谷線', type: '各駅停車', tier: 'local', interval: 6, daytime: true,
+    stops: parseStops('三軒茶屋0 西太子堂1 若林3 松陰神社前5 世田谷6 上町8 宮の坂10 山下11 松原13 下高井戸17'),
+  },
+  // ---- JOB4：JR 中距離線（土台路線） ----
+  {
+    // JOB12：東京発着の電車だけ。上野東京ラインの直通電車の東京以南は下の tokaido-ut-* で持ち、合算（10分）で東海道線の総本数にする
+    id: 'tokaido', route: 'tokaido', routeName: 'JR東海道線', type: '普通（東京発着）', tier: 'local', interval: 30, daytime: true,
+    stops: parseStops('東京0 新橋3 品川8 川崎18 横浜26 戸塚36 大船41 藤沢46 辻堂50 茅ケ崎54 平塚60 大磯64 二宮68 国府津73 鴨宮76 小田原80 早川84 根府川88 真鶴92 湯河原96 熱海101'),
+  },
+  {
+    // 逗子止まりと久里浜行きを別系統にして、逗子以北の間隔を合算させる
+    id: 'yokosuka-kurihama', route: 'yokosuka', routeName: 'JR横須賀線', type: '普通', tier: 'local', interval: 20, daytime: true,
+    stops: parseStops('東京0 新橋3 品川8 西大井13 武蔵小杉18 新川崎21 横浜29 保土ケ谷32 東戸塚36 戸塚41 大船46 北鎌倉49 鎌倉53 逗子57 東逗子61 田浦65 横須賀68 衣笠72 久里浜77'),
+  },
+  {
+    id: 'yokosuka-zushi', route: 'yokosuka', routeName: 'JR横須賀線', type: '普通', tier: 'local', interval: 20, daytime: true,
+    stops: parseStops('東京0 新橋3 品川8 西大井13 武蔵小杉18 新川崎21 横浜29 保土ケ谷32 東戸塚36 戸塚41 大船46 北鎌倉49 鎌倉53 逗子57'),
+  },
+  {
+    // JOB11：上野発着の電車だけ。上野東京ラインの直通電車の上野以北は下の takasaki-ut で持ち、合算で高崎線の総本数にする
+    id: 'takasaki', route: 'takasaki', routeName: 'JR高崎線', type: '普通（上野発着）', tier: 'local', interval: 60, daytime: true,
+    stops: chainStops(UENO_OMIYA, TAKASAKI_NORTH),
+  },
+  {
+    id: 'utsunomiya', route: 'utsunomiya', routeName: 'JR宇都宮線', type: '普通（上野発着）', tier: 'local', interval: 60, daytime: true,
+    stops: chainStops(UENO_OMIYA, UTSUNOMIYA_NORTH),
+  },
+  {
+    id: 'joban-rapid', route: 'joban', routeName: 'JR常磐線', type: '快速', tier: 'yuto', interval: 10, daytime: true,
+    stops: parseStops('上野0 日暮里4 三河島7 南千住10 北千住13 松戸22 柏31 北柏34 我孫子37 天王台41 取手44'),
+  },
+  {
+    // 各停は綾瀬から千代田線に直通し上野には来ない。JR線内（綾瀬〜取手）だけを持つ
+    id: 'joban-local', route: 'joban', routeName: 'JR常磐線', type: '各駅停車', tier: 'local', interval: 8, daytime: true,
+    stops: parseStops('綾瀬0 亀有3 金町6 松戸10 北松戸13 馬橋15 新松戸18 北小金21 南柏24 柏27 北柏30 我孫子33 天王台37 取手40'),
+  },
+  // ---- JOB9：埼京線（大崎〜大宮）。川越線・りんかい線・相鉄線への直通は持たない ----
+  {
+    id: 'saikyo-local', route: 'saikyo', routeName: 'JR埼京線', type: '各駅停車', tier: 'local', interval: 10, daytime: true,
+    stops: parseStops('大崎0 恵比寿4 渋谷7 新宿12 池袋18 板橋21 十条24 赤羽27 北赤羽29 浮間舟渡31 戸田公園34 戸田36 北戸田38 武蔵浦和41 中浦和43 南与野45 与野本町47 北与野49 大宮52'),
+  },
+  {
+    // 快速は池袋以南は各駅、板橋・十条・北赤羽〜北戸田を通過、武蔵浦和以北は各駅
+    id: 'saikyo-rapid', route: 'saikyo', routeName: 'JR埼京線', type: '快速', tier: 'yuto', interval: 20, daytime: true,
+    stops: parseStops('大崎0 恵比寿4 渋谷7 新宿12 池袋18 赤羽26 武蔵浦和36 中浦和38 南与野40 与野本町42 北与野44 大宮47'),
+  },
+  {
+    // 通勤快速は武蔵浦和以北も与野本町だけに停まる
+    id: 'saikyo-tsukin', route: 'saikyo', routeName: 'JR埼京線', type: '通勤快速', tier: 'yuto', interval: 30, daytime: false, note: '平日朝夕のみ',
+    stops: parseStops('大崎0 恵比寿4 渋谷7 新宿12 池袋18 赤羽26 武蔵浦和35 与野本町39 大宮44'),
+  },
+  // ---- JOB4：JR 直通系統（系統そのものを1路線として持つ。土台路線と停車駅が重なってよい） ----
+  // JOB13：sections は系統が走る線路の区間（並びの順。各区間は直前の区間の to〔先頭は始発駅〕から to〔省略は終着駅〕まで）。
+  // route の路線を見合わせると、その区間だけが消え、残りの区間は同じ間隔で走る（打ち切り。logic.mjs の buildNetwork）。
+  // 区間の境界は停車駅の並びのつなぎ目（大崎・大宮・横浜）に置いた
+  // JOB13：湘南新宿ラインの電車は、大宮以北では高崎線・宇都宮線の電車、横浜以南（快速）では東海道線の電車、
+  // 西大井以南（普通。逗子〜西大井は横須賀線の電車と同じ線路・同じ停車駅）では横須賀線の電車そのもの。
+  // 上野東京ライン（JOB11・JOB12）と同じく、branchAt より先・southBranchAt より手前だけの区間はこの系統では乗せず、
+  // 分岐先の路線の系統（下の UT_BRANCHES の *-ss）で数える
+  {
+    // 湘南新宿ラインの普通も大宮〜大崎・武蔵小杉・横浜は快速と同じ停車駅で、遅い各停ではない。
+    // tier を分けると JOB2 修正3 で間隔が快速だけの計算になり実態より疎になるため、両方 yuto とする
+    id: 'ss-utsunomiya-yokosuka', route: 'shonan-shinjuku', routeName: 'JR湘南新宿ライン', type: '普通（宇都宮線〜横須賀線）', tier: 'yuto', interval: 30, daytime: true,
+    branchAt: '大宮', southBranchAt: '西大井',
+    sections: [{ route: 'yokosuka', to: '大崎' }, { route: 'shonan-shinjuku', to: '大宮' }, { route: 'utsunomiya' }],
+    stops: chainStops('逗子0 鎌倉4 北鎌倉8 大船11 戸塚16 東戸塚21 保土ケ谷25 横浜28 新川崎37 武蔵小杉40 西大井46 大崎50', SS_OSAKI_OMIYA, UTSUNOMIYA_NORTH),
+  },
+  {
+    id: 'ss-takasaki-tokaido', route: 'shonan-shinjuku', routeName: 'JR湘南新宿ライン', type: '快速（高崎線〜東海道線）', tier: 'yuto', interval: 30, daytime: true,
+    branchAt: '大宮', southBranchAt: '横浜',
+    sections: [{ route: 'tokaido', to: '横浜' }, { route: 'yokosuka', to: '大崎' }, { route: 'shonan-shinjuku', to: '大宮' }, { route: 'takasaki' }],
+    stops: chainStops(TOKAIDO_ODAWARA_YOKOHAMA, '横浜0 武蔵小杉10 大崎19', SS_OSAKI_OMIYA, TAKASAKI_NORTH),
+  },
+  // JOB11：上野東京ラインの電車は、上野以北では高崎線・宇都宮線・常磐線の電車そのもの。branchAt より先（上野以北）だけの区間は
+  // この系統では乗せず（logic.mjs の rideTime）、分岐先の路線の系統（下の UT_BRANCHES）で数える。上野をまたぐ leg だけがこの系統になる
+  // JOB12：東海道線直通の電車は、東京以南では東海道線の電車そのもの。southBranchAt より手前（東京以南）だけの区間も同様に乗せず、
+  // 東海道線の系統（UT_BRANCHES の tokaido-ut-*）で数える。常磐線直通（品川〜東京）は東海道線の電車ではないので持たない。
+  // JOB13：sections は湘南新宿ラインと同じ。枝側（東海道線・高崎線・宇都宮線・常磐線）を見合わせると、その区間だけが消え、
+  // 東京・上野で打ち切った残りの区間は同じ間隔で走る。上野東京ライン（東京〜上野）そのものの見合わせでは、JOB12 のとおり
+  // 直通電車が全部消える（分岐先の同じ電車 UT_BRANCHES も dependsOn に ueno-tokyo を持つ）
+  {
+    id: 'ut-utsunomiya', route: 'ueno-tokyo', routeName: 'JR上野東京ライン', type: '普通（宇都宮線〜東海道線）', tier: 'local', interval: 30, daytime: true,
+    branchAt: '上野', southBranchAt: '東京',
+    sections: [{ route: 'tokaido', to: '東京' }, { route: 'ueno-tokyo', to: '上野' }, { route: 'utsunomiya' }],
+    stops: chainStops(TOKAIDO_ODAWARA_YOKOHAMA, UT_YOKOHAMA_OMIYA, UTSUNOMIYA_NORTH),
+  },
+  {
+    id: 'ut-takasaki', route: 'ueno-tokyo', routeName: 'JR上野東京ライン', type: '普通（高崎線〜東海道線）', tier: 'local', interval: 30, daytime: true,
+    branchAt: '上野', southBranchAt: '東京',
+    sections: [{ route: 'tokaido', to: '東京' }, { route: 'ueno-tokyo', to: '上野' }, { route: 'takasaki' }],
+    stops: chainStops('熱海0 湯河原5 真鶴9 根府川13 早川17 小田原21', TOKAIDO_ODAWARA_YOKOHAMA, UT_YOKOHAMA_OMIYA, TAKASAKI_NORTH),
+  },
+  {
+    // 常磐線の中距離電車（取手以北へ行く普通）。品川〜上野〜取手のみ持つ。三河島・南千住は通過
+    // JOB12：品川〜東京は東海道線の線路を走るので、その区間は東海道線の見合わせで消える（JOB13：東京止まりとして残りは走る）。
+    // 東海道線の電車ではないので southBranchAt は持たない（品川〜東京だけの leg もこの系統で乗る）
+    id: 'ut-joban', route: 'ueno-tokyo', routeName: 'JR上野東京ライン', type: '普通（常磐線〜品川）', tier: 'local', interval: 20, daytime: true,
+    branchAt: '上野',
+    sections: [{ route: 'tokaido', to: '東京' }, { route: 'ueno-tokyo', to: '上野' }, { route: 'joban' }],
+    stops: parseStops('品川0 新橋5 東京8 上野15 日暮里19 北千住27 松戸36 柏45 我孫子51 取手58'),
+  },
+];
+
+// ---- JOB11：上野東京ラインの直通電車の上野以北（分岐先の路線の系統として数える） ----
+// 停車駅と累積所要は直通系統の from〜to の区間をそのまま使う。throughOf は元の直通系統（同じ電車）の ID。
+// 常磐線の中距離電車は三河島・南千住を通過し快速より速いので、快速と同じ yuto とする
+// JOB12：東海道線直通の電車の東京以南も、東海道線の系統として同じ形で持つ（from は東京、to は直通系統の南端）。
+// JOB13：dependsOn は分岐先の路線と上野東京ライン。分岐先の区間は、他の枝（東海道線と高崎線など）の見合わせでは打ち切りで残り、
+// 上野東京ラインの見合わせでは直通電車として消える（JOB12）
+// JOB13：湘南新宿ラインの電車の大宮以北・横浜以南・西大井以南も、同じ形で分岐先の路線の系統として持つ（*-ss）。
+// 表示は「（湘南新宿ライン直通を含む）」、dependsOn は分岐先の路線と湘南新宿ライン
+const UT_BRANCHES = [
+  { id: 'takasaki-ut', route: 'takasaki', routeName: 'JR高崎線', throughOf: 'ut-takasaki', from: '上野', to: '高崎', tier: 'local' },
+  { id: 'utsunomiya-ut', route: 'utsunomiya', routeName: 'JR宇都宮線', throughOf: 'ut-utsunomiya', from: '上野', to: '宇都宮', tier: 'local' },
+  { id: 'joban-ut', route: 'joban', routeName: 'JR常磐線', throughOf: 'ut-joban', from: '上野', to: '取手', tier: 'yuto' },
+  { id: 'tokaido-ut-takasaki', route: 'tokaido', routeName: 'JR東海道線', throughOf: 'ut-takasaki', from: '東京', to: '熱海', tier: 'local' },
+  { id: 'tokaido-ut-utsunomiya', route: 'tokaido', routeName: 'JR東海道線', throughOf: 'ut-utsunomiya', from: '東京', to: '小田原', tier: 'local' },
+  { id: 'takasaki-ss', route: 'takasaki', routeName: 'JR高崎線', throughOf: 'ss-takasaki-tokaido', from: '大宮', to: '高崎', tier: 'local', via: 'ss' },
+  { id: 'utsunomiya-ss', route: 'utsunomiya', routeName: 'JR宇都宮線', throughOf: 'ss-utsunomiya-yokosuka', from: '大宮', to: '宇都宮', tier: 'local', via: 'ss' },
+  { id: 'tokaido-ss', route: 'tokaido', routeName: 'JR東海道線', throughOf: 'ss-takasaki-tokaido', from: '横浜', to: '小田原', tier: 'local', via: 'ss' },
+  { id: 'yokosuka-ss', route: 'yokosuka', routeName: 'JR横須賀線', throughOf: 'ss-utsunomiya-yokosuka', from: '西大井', to: '逗子', tier: 'local', via: 'ss' },
+];
+const BRANCH_VIA = {
+  ut: { type: '普通（上野東京ライン直通）', throughName: '上野東京ライン' },
+  ss: { type: '普通（湘南新宿ライン直通）', throughName: '湘南新宿ライン' },
+};
+for (const b of UT_BRANCHES) {
+  const base = SYSTEMS.find((s) => s.id === b.throughOf);
+  SYSTEMS.push({
+    id: b.id, route: b.route, routeName: b.routeName, type: BRANCH_VIA[b.via || 'ut'].type, tier: b.tier, interval: base.interval, daytime: true,
+    throughOf: b.throughOf, throughName: BRANCH_VIA[b.via || 'ut'].throughName, throughLabel: `${BRANCH_VIA[b.via || 'ut'].throughName}直通を含む`,
+    dependsOn: [b.route, base.route], stops: segment(base.stops, b.from, b.to),
+  });
+}
+
+// ---- JOB6：直通（乗り入れ）系統 ----
+// 直通系統ごとに1本の路線エントリを持つ（湘南新宿ラインと同じ方式）。停車駅と累積所要は構成路線の系統からつなぐ。
+// routes は構成路線2本（停車駅の並びの前半・後半の順）、boundary は境界駅。間隔は直通電車だけの日中間隔（概算）。
+// 見合わせのトグル単位ではない（ROUTES に入れない）。構成路線のどちらかが見合わせなら消える（logic.mjs の buildNetwork）
+
+const stopsOf = (id) => SYSTEMS.find((s) => s.id === id).stops;
+
+// stops の from〜to を切り出し、from を 0 とする累積に直す（並びと逆向きの切り出しも可）
+function segment(stops, from, to) {
+  const i = stops.findIndex((s) => s.station === from);
+  const j = stops.findIndex((s) => s.station === to);
+  if (i < 0 || j < 0) throw new Error(`切り出せない区間: ${from}〜${to}`);
+  const part = i <= j ? stops.slice(i, j + 1) : stops.slice(j, i + 1).reverse();
+  return part.map((s) => ({ station: s.station, t: Math.abs(s.t - part[0].t) }));
+}
+
+// 区間（各区間は 0 起点、先頭駅は直前区間の末尾駅）をつないで1本の累積にする（chainStops の配列版）
+function joinStops(...segs) {
+  const out = [...segs[0]];
+  for (const seg of segs.slice(1)) {
+    const last = out[out.length - 1];
+    if (seg[0].station !== last.station) throw new Error(`区間のつなぎ目が不正: ${last.station} / ${seg[0].station}`);
+    for (const x of seg.slice(1)) out.push({ station: x.station, t: last.t + x.t });
+  }
+  return out;
+}
+
+const THROUGH_LINES = [
+  {
+    // 目黒線の急行・各停とも南北線へ直通する。急行と各停の差は目黒まで数分なので、湘南新宿ラインと同じく両方 yuto とする
+    // （tier を分けると、直通の急行だけの疎な間隔で待ちを数え、目黒で乗り換える方が速く見えてしまうため）
+    id: 'thru-meguro-namboku', name: '東急目黒線・東京メトロ南北線 直通', short: '目黒線・南北線直通', routes: ['meguro', 'namboku'], boundary: '目黒',
+    systems: [
+      { type: '急行', tier: 'yuto', interval: 30, stops: joinStops(segment(stopsOf('meguro-express'), '日吉', '目黒'), stopsOf('namboku')) },
+      { type: '各駅停車', tier: 'yuto', interval: 20, stops: joinStops(segment(stopsOf('meguro-local'), '日吉', '目黒'), stopsOf('namboku')) },
+    ],
+  },
+  {
+    id: 'thru-meguro-mita', name: '東急目黒線・都営三田線 直通', short: '目黒線・三田線直通', routes: ['meguro', 'mita'], boundary: '目黒',
+    systems: [
+      { type: '急行', tier: 'yuto', interval: 30, stops: joinStops(segment(stopsOf('meguro-express'), '日吉', '目黒'), stopsOf('mita')) },
+      { type: '各駅停車', tier: 'yuto', interval: 20, stops: joinStops(segment(stopsOf('meguro-local'), '日吉', '目黒'), stopsOf('mita')) },
+    ],
+  },
+  {
+    // 田園都市線の電車は日中ほぼ全部が半蔵門線へ直通する
+    id: 'thru-dento-hanzomon', name: '東急田園都市線・東京メトロ半蔵門線 直通', short: '田園都市線・半蔵門線直通', routes: ['dento', 'hanzomon'], boundary: '渋谷',
+    systems: [
+      { type: '急行', tier: 'yuto', interval: 10, stops: joinStops(segment(stopsOf('dento-express'), '中央林間', '渋谷'), stopsOf('hanzomon')) },
+      { type: '各駅停車', tier: 'local', interval: 10, stops: joinStops(segment(stopsOf('dento-local'), '中央林間', '渋谷'), stopsOf('hanzomon')) },
+    ],
+  },
+  {
+    // 副都心線内は 急行⇔東横線 急行・特急、各停⇔各停 の組で持つ
+    id: 'thru-fukutoshin-toyoko', name: '東京メトロ副都心線・東急東横線 直通', short: '副都心線・東横線直通', routes: ['fukutoshin', 'toyoko'], boundary: '渋谷',
+    systems: [
+      { type: '特急（副都心線内 急行）', tier: 'yuto', interval: 30, stops: joinStops(stopsOf('fukutoshin-express'), stopsOf('toyoko-ltd')) },
+      { type: '急行', tier: 'yuto', interval: 30, stops: joinStops(stopsOf('fukutoshin-express'), stopsOf('toyoko-express')) },
+      { type: '各駅停車', tier: 'local', interval: 16, stops: joinStops(stopsOf('fukutoshin-local'), stopsOf('toyoko-local')) },
+    ],
+  },
+  {
+    // 常磐線各停は綾瀬から千代田線へ直通する（常磐線側は各停の停車駅）
+    id: 'thru-chiyoda-joban', name: '東京メトロ千代田線・JR常磐線各停 直通', short: '千代田線・常磐線直通', routes: ['chiyoda', 'joban'], boundary: '綾瀬',
+    systems: [
+      { type: '各駅停車', tier: 'local', interval: 10, stops: joinStops(stopsOf('chiyoda'), stopsOf('joban-local')) },
+    ],
+  },
+  {
+    // 中央・総武各停の中野〜三鷹は data の各停系統に無いので、駅と累積は中央線（快速）の同区間から取る
+    id: 'thru-chuo-tozai', name: 'JR中央・総武線各停・東京メトロ東西線 直通', short: '中央総武各停・東西線直通', routes: ['sobu-local', 'tozai'], boundary: '中野',
+    systems: [
+      { type: '各駅停車', tier: 'local', interval: 20, stops: joinStops(segment(stopsOf('chuo-rapid'), '三鷹', '中野'), segment(stopsOf('tozai-local'), '中野', '西船橋')) },
+    ],
+  },
+  {
+    // 京成押上線（押上〜青砥）は途中駅を持たない（構成路線の系統に無い駅を増やさないため）。所要は概算
+    id: 'thru-asakusa-keisei', name: '都営浅草線・京成線 直通', short: '浅草線・京成直通', routes: ['asakusa', 'keisei'], boundary: '押上',
+    systems: [
+      { type: '特急', tier: 'yuto', interval: 40, stops: joinStops(stopsOf('asakusa'), parseStops('押上0 青砥9'), segment(stopsOf('keisei-tokkyu'), '青砥', '京成成田')) },
+      { type: '快速', tier: 'yuto', interval: 20, stops: joinStops(stopsOf('asakusa'), parseStops('押上0 青砥11'), segment(stopsOf('keisei-rapid'), '青砥', '京成船橋')) },
+    ],
+  },
+  {
+    id: 'thru-sobu-yokosuka', name: 'JR総武快速線・横須賀線 直通', short: '総武快速・横須賀線直通', routes: ['sobu-rapid', 'yokosuka'], boundary: '東京',
+    systems: [
+      { type: '快速', tier: 'yuto', interval: 15, stops: joinStops(segment(stopsOf('sobu-rapid'), '千葉', '東京'), stopsOf('yokosuka-kurihama')) },
+    ],
+  },
+];
+
+// 直通系統（SYSTEMS と同じ形＋through）。route は直通系統の ID
+const THROUGH_SYSTEMS = THROUGH_LINES.flatMap((line) => line.systems.map((s, i) => ({
+  id: `${line.id}-${i + 1}`, route: line.id, routeName: line.name, type: s.type, tier: s.tier, interval: s.interval, daytime: true,
+  stops: s.stops, through: { routes: line.routes, boundary: line.boundary },
+})));
+
+// 路線ID → 表示名（「止まった」トグルの単位）。operator は事業者ID（OPERATORS。JOB15）。直通系統の事業者は構成路線から引く
+const ROUTES = [
+  { id: 'sobu-rapid', name: 'JR総武快速線', short: '総武快速', operator: 'jr-east' },
+  { id: 'sobu-local', name: 'JR中央・総武線各駅停車', short: '中央・総武各停', operator: 'jr-east' },
+  { id: 'chuo', name: 'JR中央線', short: '中央線', operator: 'jr-east' },
+  { id: 'yamanote', name: 'JR山手線', short: '山手線', operator: 'jr-east' },
+  { id: 'keihin', name: 'JR京浜東北線', short: '京浜東北', operator: 'jr-east' },
+  { id: 'keisei', name: '京成本線', short: '京成', operator: 'keisei' },
+  { id: 'tozai', name: '東京メトロ東西線', short: '東西線', operator: 'tokyo-metro' },
+  // JOB4
+  { id: 'ginza', name: '東京メトロ銀座線', short: '銀座線', operator: 'tokyo-metro' },
+  { id: 'marunouchi', name: '東京メトロ丸ノ内線', short: '丸ノ内線', operator: 'tokyo-metro' },
+  { id: 'hibiya', name: '東京メトロ日比谷線', short: '日比谷線', operator: 'tokyo-metro' },
+  { id: 'chiyoda', name: '東京メトロ千代田線', short: '千代田線', operator: 'tokyo-metro' },
+  { id: 'yurakucho', name: '東京メトロ有楽町線', short: '有楽町線', operator: 'tokyo-metro' },
+  { id: 'hanzomon', name: '東京メトロ半蔵門線', short: '半蔵門線', operator: 'tokyo-metro' },
+  { id: 'namboku', name: '東京メトロ南北線', short: '南北線', operator: 'tokyo-metro' },
+  { id: 'fukutoshin', name: '東京メトロ副都心線', short: '副都心線', operator: 'tokyo-metro' },
+  { id: 'asakusa', name: '都営浅草線', short: '浅草線', operator: 'toei' },
+  { id: 'mita', name: '都営三田線', short: '三田線', operator: 'toei' },
+  { id: 'shinjuku', name: '都営新宿線', short: '新宿線', operator: 'toei' },
+  { id: 'oedo', name: '都営大江戸線', short: '大江戸線', operator: 'toei' },
+  { id: 'toyoko', name: '東急東横線', short: '東横線', operator: 'tokyu' },
+  { id: 'dento', name: '東急田園都市線', short: '田園都市線', operator: 'tokyu' },
+  { id: 'meguro', name: '東急目黒線', short: '目黒線', operator: 'tokyu' },
+  { id: 'oimachi', name: '東急大井町線', short: '大井町線', operator: 'tokyu' },
+  { id: 'ikegami', name: '東急池上線', short: '池上線', operator: 'tokyu' },
+  { id: 'tamagawa', name: '東急多摩川線', short: '多摩川線', operator: 'tokyu' },
+  { id: 'setagaya', name: '東急世田谷線', short: '世田谷線', operator: 'tokyu' },
+  { id: 'shonan-shinjuku', name: 'JR湘南新宿ライン', short: '湘南新宿', operator: 'jr-east' },
+  { id: 'ueno-tokyo', name: 'JR上野東京ライン', short: '上野東京', operator: 'jr-east' },
+  { id: 'tokaido', name: 'JR東海道線', short: '東海道線', operator: 'jr-east' },
+  { id: 'yokosuka', name: 'JR横須賀線', short: '横須賀線', operator: 'jr-east' },
+  { id: 'takasaki', name: 'JR高崎線', short: '高崎線', operator: 'jr-east' },
+  { id: 'utsunomiya', name: 'JR宇都宮線', short: '宇都宮線', operator: 'jr-east' },
+  { id: 'joban', name: 'JR常磐線', short: '常磐線', operator: 'jr-east' },
+  // JOB9
+  { id: 'saikyo', name: 'JR埼京線', short: '埼京線', operator: 'jr-east' },
+];
+
+// ---- JOB15：事業者とデータ基準日 ----
+// 事業者ID → 表示名（ROUTES の operator が参照する）
+const OPERATORS = [
+  { id: 'jr-east', name: 'JR東日本' },
+  { id: 'tokyo-metro', name: '東京メトロ' },
+  { id: 'toei', name: '東京都交通局（都営）' },
+  { id: 'tokyu', name: '東急電鉄' },
+  { id: 'keisei', name: '京成電鉄' },
+];
+
+// 事業者ID → その事業者のデータが、いつの時点の運行を反映しているか（YYYY-MM-DD）。
+// 初期値はデータ作成時点（2026-11-16）。ダイヤ改正を反映したら、その事業者の日付を更新する
+const DATA_FRESHNESS = {
+  'jr-east': '2026-11-16',
+  'tokyo-metro': '2026-11-16',
+  toei: '2026-11-16',
+  tokyu: '2026-11-16',
+  keisei: '2026-11-16',
+};
+
+// 徒歩連絡（双方向、所要分）
+const WALKS = [
+  { a: '船橋', b: '京成船橋', min: 4 },
+  { a: '東京', b: '大手町', min: 7 },
+  { a: '上野', b: '京成上野', min: 6 },
+  // JOB4：駅名の違う乗換駅（各社が乗換駅として案内している組。分は概算）。
+  // 同名の駅（渋谷・池袋・押上・目黒・中目黒・北千住・綾瀬など）は駅名で同一ノードになり、同一駅乗換として扱われる
+  { a: '赤坂見附', b: '永田町', min: 4 },
+  { a: '溜池山王', b: '国会議事堂前', min: 4 },
+  { a: '日比谷', b: '有楽町', min: 4 },
+  { a: '銀座', b: '銀座一丁目', min: 4 },
+  { a: '御茶ノ水', b: '新御茶ノ水', min: 4 },
+  { a: '淡路町', b: '小川町', min: 2 },
+  { a: '淡路町', b: '新御茶ノ水', min: 3 },
+  { a: '小川町', b: '新御茶ノ水', min: 3 },
+  { a: '秋葉原', b: '岩本町', min: 5 },
+  { a: '三越前', b: '新日本橋', min: 3 },
+  { a: '馬喰町', b: '馬喰横山', min: 3 },
+  { a: '馬喰横山', b: '東日本橋', min: 2 },
+  { a: '御徒町', b: '仲御徒町', min: 3 },
+  { a: '御徒町', b: '上野広小路', min: 4 },
+  { a: '上野広小路', b: '上野御徒町', min: 2 },
+  { a: '仲御徒町', b: '上野御徒町', min: 3 },
+  { a: '春日', b: '後楽園', min: 3 },
+  { a: '新橋', b: '汐留', min: 4 },
+  { a: '浜松町', b: '大門', min: 3 },
+  { a: '田町', b: '三田', min: 4 },
+  { a: '原宿', b: '明治神宮前', min: 3 },
+  { a: '戸越', b: '戸越銀座', min: 3 },
+  { a: '荏原中延', b: '中延', min: 3 },
+  { a: '大崎', b: '大崎広小路', min: 6 },
+  { a: '赤羽', b: '赤羽岩淵', min: 10 },
+];
+
+// 同一駅での乗換ペナルティ（徒歩連絡は徒歩分の方を使う）
+const TRANSFER_PENALTY = 4;
+
+// 並行コリドー：leg の種別集合を路線をまたいで広げる定義
+const CORRIDORS = [
+  { id: 'sobu', routes: ['sobu-rapid', 'sobu-local'], shared: ['千葉', '稲毛', '津田沼', '船橋', '市川', '新小岩', '錦糸町'] },
+  { id: 'yamanote-keihin', routes: ['yamanote', 'keihin'], shared: ['品川', '高輪ゲートウェイ', '田町', '浜松町', '新橋', '有楽町', '東京', '神田', '秋葉原', '御徒町', '上野', '鶯谷', '日暮里', '西日暮里', '田端'] },
+  { id: 'chuo', routes: ['chuo', 'sobu-local'], shared: ['御茶ノ水', '四ツ谷', '新宿', '中野', '吉祥寺', '三鷹'] },
+  // JOB10：上野〜大宮の共用区間。高崎線・宇都宮線・上野東京ライン（直通）は同じ線路・同じホーム・同じ停車駅で、
+  // 区間内だけを乗る leg は乗る側に違いがない。大宮より先（分岐後）まで乗る leg は両端条件で外れるので従来どおり分かれる。
+  // sameTrack は同じ線路・同じホームの印：区間内で路線を乗り換える（＝乗ったままと同じ）経路と、区間に乗り直す経路を作らない。
+  // label は全路線が集合に入るときの表示（見合わせで欠けたときは従来の「または」表示）
+  // JOB11：上野東京ラインの直通電車は上野以北では高崎線・宇都宮線の系統（takasaki-ut・utsunomiya-ut）として入るので、routes から外した
+  {
+    id: 'ueno-omiya', routes: ['takasaki', 'utsunomiya'], shared: ['上野', '尾久', '赤羽', '浦和', 'さいたま新都心', '大宮'],
+    sameTrack: true,
+    label: 'JR高崎線・宇都宮線（上野東京ライン直通を含む）',
+    // JOB12：直通電車が見合わせで抜けたときの表示
+    plainLabel: 'JR高崎線・宇都宮線',
+  },
+];
+
+// 編成両数の目安（路線ID → 表示文字列）
+const CAR_COUNTS = {
+  'sobu-rapid': '11両または15両',
+  'sobu-local': '10両',
+  chuo: '10両または12両',
+  yamanote: '11両',
+  keihin: '10両',
+  keisei: '優等8両',
+  tozai: '10両',
+  saikyo: '10両', // JOB9
+};
+
+// 路線ごとの表示色（JOB3、JOB3b で総武快速・京成を単色化）。style: 'solid' は colors 1色のベタ、
+// 'stripe' は colors 2色のたてしま（現在は該当路線なし）。たてしまはコリドー leg（どちらの路線でもいい）の印に使う。
+// UI はこれだけを見てバー・チップを描く（色を UI 側に持たない）
+const LINE_COLORS = {
+  yamanote: { style: 'solid', colors: ['#80C241'] },
+  keihin: { style: 'solid', colors: ['#00B2E5'] },
+  chuo: { style: 'solid', colors: ['#F15A22'] },
+  'sobu-local': { style: 'solid', colors: ['#FFD400'] },
+  'sobu-rapid': { style: 'solid', colors: ['#00418E'] },
+  keisei: { style: 'solid', colors: ['#005AAA'] },
+  tozai: { style: 'solid', colors: ['#009AD6'] },
+  // JOB4：各社が路線図で使う一般的なラインカラー（単色のみ）
+  ginza: { style: 'solid', colors: ['#F39700'] },
+  marunouchi: { style: 'solid', colors: ['#E60012'] },
+  hibiya: { style: 'solid', colors: ['#9CAEB7'] },
+  chiyoda: { style: 'solid', colors: ['#00BB85'] },
+  yurakucho: { style: 'solid', colors: ['#C1A470'] },
+  hanzomon: { style: 'solid', colors: ['#8F76D6'] },
+  namboku: { style: 'solid', colors: ['#00AC9B'] },
+  fukutoshin: { style: 'solid', colors: ['#9C5E31'] },
+  asakusa: { style: 'solid', colors: ['#E85298'] },
+  mita: { style: 'solid', colors: ['#0079C2'] },
+  shinjuku: { style: 'solid', colors: ['#6CBB5A'] },
+  oedo: { style: 'solid', colors: ['#B6007A'] },
+  toyoko: { style: 'solid', colors: ['#DA0442'] },
+  dento: { style: 'solid', colors: ['#20A288'] },
+  meguro: { style: 'solid', colors: ['#009CD2'] },
+  oimachi: { style: 'solid', colors: ['#F18C43'] },
+  ikegami: { style: 'solid', colors: ['#EE86A7'] },
+  tamagawa: { style: 'solid', colors: ['#AE0378'] },
+  setagaya: { style: 'solid', colors: ['#FCC70D'] },
+  'shonan-shinjuku': { style: 'solid', colors: ['#E21F26'] },
+  'ueno-tokyo': { style: 'solid', colors: ['#91278F'] },
+  tokaido: { style: 'solid', colors: ['#F68B1E'] },
+  yokosuka: { style: 'solid', colors: ['#0067C0'] },
+  takasaki: { style: 'solid', colors: ['#F68B1E'] },
+  utsunomiya: { style: 'solid', colors: ['#F68B1E'] },
+  joban: { style: 'solid', colors: ['#00B261'] },
+  // JOB9：JR 東日本の路線図で埼京線に使われる緑（山手線の黄緑 #80C241 とは別）
+  saikyo: { style: 'solid', colors: ['#00AC9A'] },
+};
+
+// ---- JOB14：モデル便の発車位相（分） ----
+// 系統（SYSTEMS・THROUGH_SYSTEMS の各エントリ）ごとに [並び順の向き, 逆向き] の、始発駅（逆向きは終着駅）を出る時刻の位相。
+// 駅 S の発車時刻 = 位相 + 始発駅から S までの累積所要 + k × 間隔（timetable.mjs）。0 ≤ 位相 < 間隔。
+// 値は tools/gen_phases.mjs で決定的に生成したもの（系統ID・向きのハッシュ mod 間隔。分岐先の同じ電車は元の直通系統に合わせる）。
+// 実行時には生成しない。系統や間隔を変えたら node tools/gen_phases.mjs で作り直して貼り替える
+const TRIP_PHASES = {
+  'sobu-rapid': [1, 11],
+  'sobu-local': [2, 5],
+  'chuo-rapid': [1, 1],
+  'chuo-tokkai': [12, 8],
+  'yamanote': [0, 3],
+  'keihin-local': [4, 3],
+  'keihin-rapid': [8, 2],
+  'keisei-kaitoku': [33, 32],
+  'keisei-tokkyu': [6, 39],
+  'keisei-tsukin': [29, 56],
+  'keisei-rapid': [19, 0],
+  'keisei-local': [4, 3],
+  'tozai-rapid': [10, 11],
+  'tozai-tsukin': [4, 7],
+  'tozai-local': [1, 0],
+  'ginza': [1, 0],
+  'marunouchi': [0, 3],
+  'marunouchi-honancho': [3, 8],
+  'hibiya': [0, 3],
+  'chiyoda': [2, 2],
+  'chiyoda-kitaayase': [6, 5],
+  'chiyoda-kitaayase-thru': [16, 53],
+  'yurakucho': [2, 3],
+  'hanzomon': [0, 1],
+  'namboku': [5, 3],
+  'fukutoshin-local': [0, 0],
+  'fukutoshin-express': [0, 11],
+  'asakusa': [4, 0],
+  'mita': [2, 5],
+  'shinjuku-local': [4, 5],
+  'shinjuku-express': [6, 9],
+  'oedo': [3, 0],
+  'toyoko-local': [3, 6],
+  'toyoko-express': [9, 12],
+  'toyoko-ltd': [5, 6],
+  'toyoko-commuter': [28, 8],
+  'dento-local': [0, 2],
+  'dento-express': [2, 5],
+  'meguro-local': [6, 5],
+  'meguro-express': [9, 0],
+  'oimachi-local': [1, 3],
+  'oimachi-express': [3, 7],
+  'ikegami': [2, 1],
+  'tamagawa': [4, 0],
+  'setagaya': [4, 1],
+  'tokaido': [19, 12],
+  'yokosuka-kurihama': [15, 3],
+  'yokosuka-zushi': [15, 6],
+  'takasaki': [3, 39],
+  'utsunomiya': [35, 44],
+  'joban-rapid': [9, 0],
+  'joban-local': [7, 6],
+  'saikyo-local': [0, 8],
+  'saikyo-rapid': [17, 14],
+  'saikyo-tsukin': [11, 13],
+  'ss-utsunomiya-yokosuka': [9, 18],
+  'ss-takasaki-tokaido': [0, 28],
+  'ut-utsunomiya': [13, 21],
+  'ut-takasaki': [5, 13],
+  'ut-joban': [14, 12],
+  'takasaki-ut': [23, 13],
+  'utsunomiya-ut': [10, 21],
+  'joban-ut': [9, 12],
+  'tokaido-ut-takasaki': [0, 5],
+  'tokaido-ut-utsunomiya': [2, 13],
+  'takasaki-ss': [26, 28],
+  'utsunomiya-ss': [12, 18],
+  'tokaido-ss': [14, 0],
+  'yokosuka-ss': [13, 9],
+  'thru-meguro-namboku-1': [24, 28],
+  'thru-meguro-namboku-2': [13, 19],
+  'thru-meguro-mita-1': [2, 23],
+  'thru-meguro-mita-2': [6, 8],
+  'thru-dento-hanzomon-1': [2, 3],
+  'thru-dento-hanzomon-2': [2, 7],
+  'thru-fukutoshin-toyoko-1': [3, 12],
+  'thru-fukutoshin-toyoko-2': [12, 4],
+  'thru-fukutoshin-toyoko-3': [5, 10],
+  'thru-chiyoda-joban-1': [7, 2],
+  'thru-chuo-tozai-1': [6, 14],
+  'thru-asakusa-keisei-1': [7, 23],
+  'thru-asakusa-keisei-2': [4, 17],
+  'thru-sobu-yokosuka-1': [10, 6],
+};
+
+// ---- timetable.mjs ----
+// 便層（JOB14）：便の取得。実時刻表は使わず、系統ごとの運行間隔＋発車位相（data.mjs の TRIP_PHASES）から便を生成する（モデル便）。
+// パターン層（logic.mjs の planTrips）は、このモジュールの firstTripAfter / lastTripBefore / shiftTrip だけを通して便を取る。
+// 実データに差し替えるときは、この3つを時刻表の検索で実装し直せばよい（引数の系統はネットワーク上の系統＝見合わせ・打ち切り適用後）
+
+// 運行窓（分）。乗る駅の発車時刻がこの範囲に入る便だけを立てる。24時以降は 24:00 = 1440 からの続きで数える
+const SERVICE_START = 5 * 60;
+const SERVICE_END = 25 * 60;
+
+// 見合わせの打ち切り系統（logic.mjs の cutSections）は同じ ID で停車駅が一部だけになる。
+// 累積所要は元の系統の始発駅（逆向きは終着駅）から数える（同じ電車が途中で打ち切られる扱い）
+const ORIGINAL = new Map([...SYSTEMS, ...THROUGH_SYSTEMS].map((s) => [s.id, s]));
+
+function stopT(sys, station) {
+  const st = sys.stops.find((x) => x.station === station);
+  return st ? st.t : undefined;
+}
+
+// 系統 id の向き dir（0 = 停車駅の並び順、1 = 逆順）で、始発駅から station までの累積所要。
+// 環状（山手線）は東京を始発駅とし、逆向きは東京から逆回りに数える
+function cumulativeAt(id, dir, station) {
+  const s = ORIGINAL.get(id);
+  const t = stopT(s, station);
+  if (t === undefined) return undefined;
+  const first = s.stops[0].t;
+  const last = s.stops[s.stops.length - 1].t;
+  if (dir === 0) return t - first;
+  return s.ring ? (last - t) % (last - first) : last - t;
+}
+
+function phaseOf(id, dir) {
+  const p = TRIP_PHASES[id];
+  if (!p) throw new Error(`${id}: 発車位相（TRIP_PHASES）がない`);
+  return p[dir];
+}
+
+// 系統 sys で from→to に乗るときの向きと乗車分。環状は近い向き（パターン層の rideTime と同じ）。同じ長さなら両向き
+function runsOf(sys, from, to) {
+  const a = stopT(sys, from);
+  const b = stopT(sys, to);
+  if (a === undefined || b === undefined || a === b) return [];
+  if (sys.ring) {
+    const len = sys.stops[sys.stops.length - 1].t - sys.stops[0].t;
+    const f = (((b - a) % len) + len) % len;
+    const r = len - f;
+    const m = Math.min(f, r);
+    return [f === m ? { dir: 0, ride: f } : null, r === m ? { dir: 1, ride: r } : null].filter(Boolean);
+  }
+  return [{ dir: a < b ? 0 : 1, ride: Math.abs(b - a) }];
+}
+
+// from の発車時刻の基準（k = 0 の便）。発車時刻 = 位相 + 始発駅から from までの累積 + k × 間隔
+const baseDep = (sys, run, from) => phaseOf(sys.id, run.dir) + cumulativeAt(sys.id, run.dir, from);
+
+const makeTrip = (sys, from, to, run, dep) => ({ system: sys.id, from, to, dir: run.dir, dep, arr: dep + run.ride });
+
+const inWindow = (dep) => dep >= SERVICE_START && dep <= SERVICE_END;
+
+// 系統 sys で from→to に乗る便のうち、from を t 以降に出る最初の便（運行窓の外なら null）
+function firstTripAfter(sys, from, to, t) {
+  let best = null;
+  for (const run of runsOf(sys, from, to)) {
+    const base = baseDep(sys, run, from);
+    const lo = Math.max(t, SERVICE_START);
+    const dep = base + Math.ceil((lo - base) / sys.interval) * sys.interval;
+    if (!inWindow(dep)) continue;
+    if (!best || dep < best.dep) best = makeTrip(sys, from, to, run, dep);
+  }
+  return best;
+}
+
+// 系統 sys で from→to に乗る便のうち、to に t までに着く最後の便（運行窓の外なら null）
+function lastTripBefore(sys, from, to, t) {
+  let best = null;
+  for (const run of runsOf(sys, from, to)) {
+    const base = baseDep(sys, run, from);
+    const hi = Math.min(t - run.ride, SERVICE_END);
+    const dep = base + Math.floor((hi - base) / sys.interval) * sys.interval;
+    if (!inWindow(dep)) continue;
+    if (!best || dep > best.dep) best = makeTrip(sys, from, to, run, dep);
+  }
+  return best;
+}
+
+// 便 trip と同じ系統・同じ向きの n 本後（負なら前）の便（運行窓の外なら null）
+function shiftTrip(sys, trip, n) {
+  const dep = trip.dep + n * sys.interval;
+  if (!inWindow(dep)) return null;
+  return { ...trip, dep, arr: dep + (trip.arr - trip.dep) };
+}
+
+// ---- logic.mjs ----
+// 乗換案内 v0 — 時刻なし・経路パターン列挙ロジック
+// ブラウザ（app.js）と Node（tests/run_tests.mjs）の両方から import する純粋関数群。
+// JOB14：便層。便の取得はこの3つの関数だけを通す（モデル便の中身は timetable.mjs）
+
+const DEFAULT_OPTIONS = {
+  maxRailLegs: 4, // 鉄道 leg の上限（徒歩連絡は数えない）。JOB.md の 3 から JOB4b で 4 に変更（直通を乗換扱いにしたため）
+  capRatio: 1.6, // コスト上限：最良 × capRatio
+  capSlack: 25, // コスト上限：最良 + capSlack 分
+  // 2つの上限の組み合わせ方。'min' = 両方を満たす（字義どおり）、'max' = どちらかを満たす。
+  // 正式仕様は 'max'（上限＝max(最良×1.6, 最良＋25分)、JOB2 決定済み事項）
+  capMode: 'max',
+  // tier 別の間隔・所要（JOB2 修正3）を適用する leg の範囲。
+  // 'single-route' = 1路線だけの leg（コリドーで路線をまたいで広げた leg は従来どおり全系統）
+  // 'all' = daytime 優等を含む全 leg（字義どおり。修正1のテストと両立しない。REPORT2.md 参照）
+  tierSplit: 'single-route',
+  // 列挙するパス数の上限。JOB.md の 200 から JOB4b で 300 に変更（leg 上限 4 だと 4 leg の安い経路が 200 本を埋め、
+  // 船橋→東京 の京成上野パターン（T1(d)・T3・T10）まで届かないため。REPORT4b.md 参照）
+  maxPaths: 300,
+  // 出力パターン数の上限。JOB.md の 8 件から JOB4 で 12 件に変更（路線網の拡大で、§3 の京成パターンが 9〜11 位に下がるため。REPORT4.md 参照）、
+  // JOB8 で 13 件に変更（JOB7b の支配フィルタ例外で 船橋→東京 の京成上野経由が 13 位に下がるため。REPORT7b.md 参照）
+  maxPatterns: 13,
+  // JOB4：より速いパターンに支配されるパターン（それが生きている見合わせ状況では、より速い方も必ず生きていて、
+  // しかも依存する路線が多い）を出さない。
+  // 路線網が広がると、速いパターンに路線を足しただけの遠回りが上位を埋めるため（DESIGN.md §2 の多様性制約）
+  dropDominated: true,
+  maxExpansions: 200000, // 安全弁
+};
+
+// ---------- ネットワーク ----------
+
+// 見合わせ路線ID集合を除いたネットワークを作る
+function buildNetwork(suspended = [], { tierSplit = DEFAULT_OPTIONS.tierSplit } = {}) {
+  const off = new Set(suspended);
+  // JOB6：直通系統は、構成路線のどちらかが見合わせなら消える
+  // JOB12：dependsOn を持つ系統（上野東京ラインの分岐先の同じ電車）も、そのどれかが見合わせなら消える
+  // JOB13：sections を持つ系統（湘南新宿ライン・上野東京ライン）は、見合わせの区間だけを除き、残りの区間ごとに打ち切りの系統にする
+  const systems = [...SYSTEMS, ...THROUGH_SYSTEMS]
+    .filter((s) => !off.has(s.route) && systemDeps(s).every((r) => !off.has(r)))
+    .flatMap((s) => (s.sections ? cutSections(s, off) : [s]));
+  // adj: route -> station -> Map(neighbor -> 分)。同一路線・同一駅間は最小値を採る
+  const adj = new Map();
+  const addEdge = (route, a, b, w) => {
+    if (!adj.has(route)) adj.set(route, new Map());
+    const m = adj.get(route);
+    for (const [x, y] of [[a, b], [b, a]]) {
+      if (!m.has(x)) m.set(x, new Map());
+      const cur = m.get(x).get(y);
+      if (cur === undefined || w < cur) m.get(x).set(y, w);
+    }
+  };
+  for (const s of systems) {
+    for (let i = 0; i + 1 < s.stops.length; i++) {
+      const a = s.stops[i];
+      const b = s.stops[i + 1];
+      if (a.station === b.station) continue;
+      addEdge(s.route, a.station, b.station, b.t - a.t);
+    }
+  }
+  const walks = new Map();
+  for (const w of WALKS) {
+    for (const [x, y] of [[w.a, w.b], [w.b, w.a]]) {
+      if (!walks.has(x)) walks.set(x, []);
+      walks.get(x).push({ to: y, min: w.min });
+    }
+  }
+  return { systems, adj, walks, suspended: [...off], tierSplit };
+}
+
+// 系統が走るのに生きている必要がある路線（直通系統は構成路線、dependsOn があればそれ、なければ自分の路線）。
+// sections を持つ系統は区間ごとに cutSections で判定するので、ここでは自分の路線だけ
+function systemDeps(s) {
+  if (s.through) return s.through.routes;
+  return s.dependsOn || [s.route];
+}
+
+// JOB13：sections を停車駅の添字の範囲 { route, i, j }（stops[i]〜stops[j]）に直す
+function sectionRanges(s) {
+  let i = 0;
+  return s.sections.map((sec, n) => {
+    const j = n === s.sections.length - 1 || sec.to === undefined ? s.stops.length - 1 : s.stops.findIndex((x) => x.station === sec.to);
+    if (j <= i) throw new Error(`${s.id}: 区間の境界が不正（${sec.to}）`);
+    const r = { route: sec.route, i, j };
+    i = j;
+    return r;
+  });
+}
+
+// JOB13：見合わせの区間を除き、生きている区間の連なりごとに打ち切りの系統（同じ ID・同じ間隔）にする。
+// 打ち切りの系統の sections は残った区間だけ（末尾の to は打ち切り駅）
+function cutSections(s, off) {
+  const ranges = sectionRanges(s);
+  if (ranges.every((r) => !off.has(r.route))) return [s];
+  const runs = [];
+  let cur = null;
+  for (const r of ranges) {
+    if (off.has(r.route)) { cur = null; continue; }
+    if (!cur) runs.push((cur = []));
+    cur.push(r);
+  }
+  return runs.map((run) => ({
+    ...s,
+    stops: s.stops.slice(run[0].i, run[run.length - 1].j + 1),
+    sections: run.map((r) => ({ route: r.route, to: s.stops[r.j].station })),
+    cut: true,
+  }));
+}
+
+// 系統 sys で from→to を乗るのに生きている必要がある路線。
+// JOB13：sections を持つ系統は、自分の路線と、乗る区間（from〜to が掛かる区間）の路線
+function rideDeps(sys, from, to) {
+  if (!sys.sections) return systemDeps(sys);
+  const a = sys.stops.findIndex((x) => x.station === from);
+  const b = sys.stops.findIndex((x) => x.station === to);
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  const spanned = sectionRanges(sys).filter((r) => r.i < hi && r.j > lo).map((r) => r.route);
+  return [...new Set([sys.route, ...spanned])];
+}
+
+// 全駅（データ順・重複なし）
+function allStations() {
+  const seen = new Set();
+  for (const s of SYSTEMS) for (const st of s.stops) seen.add(st.station);
+  for (const w of WALKS) { seen.add(w.a); seen.add(w.b); }
+  return [...seen];
+}
+
+// 路線ごとの駅一覧（UI のセレクト用）
+function stationsByRoute() {
+  return ROUTES.map((r) => {
+    const seen = new Set();
+    for (const s of SYSTEMS) if (s.route === r.id) for (const st of s.stops) seen.add(st.station);
+    return { route: r, stations: [...seen] };
+  });
+}
+
+function routeInfo(id) {
+  return ROUTES.find((r) => r.id === id) || THROUGH_LINES.find((l) => l.id === id);
+}
+
+// JOB6：路線ID が直通系統ならその定義（そうでなければ undefined）
+const THROUGH_BY_ID = new Map(THROUGH_LINES.map((l) => [l.id, l]));
+const SYSTEM_BY_ID = new Map(SYSTEMS.map((s) => [s.id, s]));
+// 直通系統の停車駅（全種別の和）
+const THROUGH_STATIONS = new Map(THROUGH_LINES.map((l) => [l.id, new Set(l.systems.flatMap((s) => s.stops.map((x) => x.station)))]));
+
+// 路線の構成路線（直通系統は2本、それ以外は自分だけ）。同じ経路での路線の再使用の判定に使う
+function routeParts(route) {
+  const t = THROUGH_BY_ID.get(route);
+  return t ? t.routes : [route];
+}
+
+// ---------- JOB15：事業者とデータ基準日 ----------
+
+// 路線ID（直通系統ID・系統の route も可）→ 事業者ID の配列。直通系統は構成路線の事業者（重複なし、並び順は構成路線順）
+function operatorsOf(route) {
+  return [...new Set(routeParts(route).map((r) => ROUTES.find((x) => x.id === r)?.operator).filter(Boolean))];
+}
+
+// today（Date）以前で直近の4月1日（YYYY-MM-DD）。ダイヤ改正は3月に集中するので、これより前の基準日は前シーズンのデータ
+function latestApril1(today) {
+  const y = today.getFullYear();
+  return today.getMonth() >= 3 ? `${y}-04-01` : `${y - 1}-04-01`;
+}
+
+// 事業者ごとの基準日一覧。stale＝基準日が直近の4月1日より前（今年のダイヤ改正が未反映の可能性）
+function freshnessList(today = new Date()) {
+  const border = latestApril1(today);
+  return OPERATORS.map((o) => ({ id: o.id, name: o.name, asOf: DATA_FRESHNESS[o.id], stale: !DATA_FRESHNESS[o.id] || DATA_FRESHNESS[o.id] < border }));
+}
+
+// 基準日の表示（2026-11-16 → 2026年11月16日）
+function fmtDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+  return m ? `${m[1]}年${Number(m[2])}月${Number(m[3])}日` : '不明';
+}
+
+// ---------- leg（種別集合） ----------
+
+function stopTime(sys, station) {
+  const st = sys.stops.find((x) => x.station === station);
+  return st ? st.t : undefined;
+}
+
+// 系統 sys での from→to の乗車分（停まらなければ undefined）
+function rideTime(sys, from, to) {
+  const a = stopTime(sys, from);
+  const b = stopTime(sys, to);
+  if (a === undefined || b === undefined) return undefined;
+  // JOB6：直通系統は境界駅をまたぐ区間だけ（境界駅で乗る・降りる区間や片側だけの区間は構成路線の leg で持つ）
+  if (sys.through) {
+    const k = stopTime(sys, sys.through.boundary);
+    if (!((a < k && k < b) || (b < k && k < a))) return undefined;
+  }
+  // JOB11：上野東京ラインは分岐駅（上野）から先だけの区間を乗せない（分岐先の路線の系統で数える）
+  if (sys.branchAt) {
+    const k = stopTime(sys, sys.branchAt);
+    if (a >= k && b >= k) return undefined;
+  }
+  // JOB12：東海道線直通は分岐駅（東京）より手前だけの区間も乗せない（東海道線の系統で数える）
+  if (sys.southBranchAt) {
+    const k = stopTime(sys, sys.southBranchAt);
+    if (a <= k && b <= k) return undefined;
+  }
+  if (sys.ring) {
+    // 環状：近い向きを採る（同じ路線・同じ両端なら signature は同一なので向きの区別は持たない）
+    const len = sys.stops[sys.stops.length - 1].t;
+    const d = (((b - a) % len) + len) % len;
+    return Math.min(d, len - d);
+  }
+  return Math.abs(b - a);
+}
+
+// 合算間隔 = 1 / Σ(1/間隔)
+function combinedInterval(systems) {
+  if (systems.length === 0) return undefined;
+  return 1 / systems.reduce((acc, s) => acc + 1 / s.interval, 0);
+}
+
+// JOB10：leg が同一線路の共用区間（sameTrack のコリドー）の leg ならその定義
+function sameTrackOf(leg) {
+  return leg && leg.kind === 'rail' && leg.corridor ? CORRIDORS.find((c) => c.sameTrack && c.id === leg.corridor) : undefined;
+}
+
+// JOB11：2つの leg に、直通系統と分岐先での同じ電車（throughOf）の組があるか
+function sameTrainContinues(l1, l2) {
+  const ids1 = new Set(l1.systems.map((s) => s.id));
+  const ids2 = new Set(l2.systems.map((s) => s.id));
+  const of = (id) => SYSTEM_BY_ID.get(id) && SYSTEM_BY_ID.get(id).throughOf;
+  return [...ids2].some((id) => ids1.has(of(id))) || [...ids1].some((id) => ids2.has(of(id)));
+}
+
+function corridorsFor(route, from, to) {
+  return CORRIDORS.filter((c) => c.routes.includes(route) && c.shared.includes(from) && c.shared.includes(to));
+}
+
+// 路線＋乗車駅＋降車駅から種別集合を再計算して leg を作る
+function computeLeg(net, route, from, to, stations = [from, to]) {
+  const corridors = corridorsFor(route, from, to);
+  const routesInSet = new Set([route]);
+  for (const c of corridors) for (const r of c.routes) routesInSet.add(r);
+  const sets = [];
+  for (const sys of net.systems) {
+    if (!routesInSet.has(sys.route)) continue;
+    const ride = rideTime(sys, from, to);
+    if (ride === undefined || ride === 0) continue;
+    sets.push({ sys, ride });
+  }
+  const systems = sets.map((x) => x.sys);
+  const routeCount = new Set(systems.map((s) => s.route)).size;
+  // 修正3：daytime の優等が1つでもある leg は、待ち・間隔・所要範囲を優等だけで計算する（各停系は localNote で併記）
+  const tierSplit = systems.some((s) => s.daytime && s.tier === 'yuto')
+    && systems.some((s) => s.tier === 'local')
+    && (net.tierSplit === 'all' || routeCount === 1);
+  const basisSets = tierSplit ? sets.filter((x) => x.sys.tier === 'yuto') : sets;
+  const intervalOf = (list) => {
+    const daytime = list.filter((s) => s.daytime);
+    // daytime 系統が1つも無い場合は、全系統の合算で代用し、その旨をフラグで持つ
+    return { interval: combinedInterval(daytime.length ? daytime : list), intervalDaytime: daytime.length > 0 };
+  };
+  const { interval, intervalDaytime } = intervalOf(basisSets.map((x) => x.sys));
+  const rides = basisSets.map((x) => x.ride);
+  // JOB6：直通 leg は乗る順の構成路線と境界駅、境界までの乗車の割合（集合内の最速の系統で計算）を持つ
+  let through = null;
+  const thruLine = THROUGH_BY_ID.get(route);
+  if (thruLine && basisSets.length) {
+    const fastest = basisSets.reduce((x, y) => (y.ride < x.ride ? y : x));
+    const first = Math.abs(stopTime(fastest.sys, thruLine.boundary) - stopTime(fastest.sys, from));
+    const forward = stopTime(fastest.sys, from) < stopTime(fastest.sys, thruLine.boundary);
+    through = {
+      routes: forward ? [...thruLine.routes] : [...thruLine.routes].reverse(),
+      boundary: thruLine.boundary,
+      firstRatio: first / fastest.ride,
+    };
+  }
+  let localNote = null;
+  if (tierSplit) {
+    const locals = sets.filter((x) => x.sys.tier === 'local');
+    const ls = locals.map((x) => x.ride);
+    localNote = { ...intervalOf(locals.map((x) => x.sys)), rideMin: Math.min(...ls), rideMax: Math.max(...ls) };
+  }
+  return {
+    kind: 'rail',
+    route,
+    corridor: corridors.length ? corridors[0].id : null,
+    // signature 上の路線キー：コリドー共有駅どうしの leg はコリドー単位で同一視する
+    key: corridors.length ? `corridor:${corridors[0].id}` : route,
+    from,
+    to,
+    stations,
+    systems: sets.map((x) => ({
+      id: x.sys.id, route: x.sys.route, routeName: x.sys.routeName, type: x.sys.type,
+      tier: x.sys.tier, interval: x.sys.interval, daytime: x.sys.daytime, note: x.sys.note, ride: x.ride,
+      // JOB13：この leg をこの系統で乗るのに生きている必要がある路線（支配フィルタ・依存路線の表示に使う）
+      deps: rideDeps(x.sys, from, to),
+    })),
+    routes: [...new Set(systems.map((s) => s.route))],
+    rideMin: rides.length ? Math.min(...rides) : undefined,
+    rideMax: rides.length ? Math.max(...rides) : undefined,
+    interval,
+    intervalDaytime,
+    // 'yuto' = 修正3により優等だけで計算、'all' = 全系統
+    intervalBasis: tierSplit ? 'yuto' : 'all',
+    localNote,
+    through,
+    wait: interval === undefined ? undefined : interval / 2,
+  };
+}
+
+// ---------- コストと signature ----------
+
+function patternCost(steps, field = 'rideMin') {
+  let cost = 0;
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    if (s.kind === 'walk') {
+      cost += s.min;
+    } else {
+      cost += s[field] + s.wait;
+      // 鉄道→鉄道の同一駅乗換だけペナルティ（徒歩連絡を挟む場合は徒歩分のみ）
+      if (i > 0 && steps[i - 1].kind === 'rail') cost += TRANSFER_PENALTY;
+    }
+  }
+  return cost;
+}
+
+function stepKey(s) {
+  return s.kind === 'walk' ? `walk:${s.from}>${s.to}` : `${s.key}:${s.from}>${s.to}`;
+}
+
+function signature(steps) {
+  return steps.map(stepKey).join(' / ');
+}
+
+function patternStations(steps) {
+  const out = [];
+  for (const s of steps) {
+    const seq = s.kind === 'walk' ? [s.from, s.to] : s.stations;
+    for (const st of seq) if (out[out.length - 1] !== st) out.push(st);
+  }
+  return out;
+}
+
+// ---------- 探索（best-first） ----------
+
+// f（＝g＋残り所要の下界）の小さい順に取り出す。同じ f なら通過駅の少ない状態を先に
+// （支配枝刈りの seen は通過駅集合を見ないので、同額なら後続を塞がない短い経路を残す）
+const before = (x, y) => x.f < y.f || (x.f === y.f && (x.visited ? x.visited.size : 0) < (y.visited ? y.visited.size : 0));
+class MinHeap {
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+  push(x) {
+    const a = this.a;
+    a.push(x);
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (!before(a[i], a[p])) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.a;
+    const top = a[0];
+    const last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1;
+        const r = l + 1;
+        let m = i;
+        if (l < a.length && before(a[l], a[m])) m = l;
+        if (r < a.length && before(a[r], a[m])) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
+function costCap(best, opts) {
+  const a = best * opts.capRatio;
+  const b = best + opts.capSlack;
+  return opts.capMode === 'min' ? Math.min(a, b) : Math.max(a, b);
+}
+
+// JOB4：各駅から dest までの所要の下界（全路線の最短乗車分＋徒歩分。待ち・乗換ペナルティは数えない）。
+// 探索の並び順と打ち切りに使う（A*）。下界なので、上限内のパスを取りこぼさない
+function lowerBounds(net, dest) {
+  const nb = new Map();
+  const add = (a, b, w) => {
+    if (!nb.has(a)) nb.set(a, []);
+    nb.get(a).push([b, w]);
+  };
+  for (const m of net.adj.values()) for (const [a, ns] of m) for (const [b, w] of ns) add(a, b, w);
+  for (const [a, ws] of net.walks) for (const wk of ws) add(a, wk.to, wk.min);
+  const dist = new Map([[dest, 0]]);
+  const heap = new MinHeap();
+  heap.push({ station: dest, f: 0 });
+  while (heap.size) {
+    const { station, f } = heap.pop();
+    if (f > dist.get(station)) continue;
+    for (const [y, w] of nb.get(station) || []) {
+      const d = f + w;
+      if (!dist.has(y) || d < dist.get(y)) {
+        dist.set(y, d);
+        heap.push({ station: y, f: d });
+      }
+    }
+  }
+  return dist;
+}
+
+// 生のパス（ステップ列）をコスト順に最大 maxPaths 本列挙する
+function enumeratePaths(net, origin, dest, options = {}) {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const results = [];
+  const stats = { expanded: 0, completed: 0 };
+  if (origin === dest) return { results, stats, best: undefined, cap: undefined };
+
+  let best = Infinity;
+  const lb = lowerBounds(net, dest);
+  if (!lb.has(origin)) return { results, stats, best: undefined, cap: undefined };
+  const heap = new MinHeap();
+  // 到達できない駅（下界なし）へは積まない
+  const push = (ns) => {
+    const h = lb.get(ns.station);
+    if (h === undefined) return;
+    ns.f = ns.g + h;
+    heap.push(ns);
+  };
+  // 支配枝刈り：同じ「確定済み leg 列＋現在駅＋乗車中の路線と乗車駅」なら安い方だけ展開する
+  const seen = new Map();
+
+  // 乗車中の leg を確定する（種別集合が空なら null）
+  const closeLeg = (st) => {
+    const c = st.cur;
+    const leg = computeLeg(net, c.route, c.from, st.station, c.path);
+    if (!leg.systems.length) return null;
+    // JOB10：共用区間 leg の直前に、同じ駅でその区間の路線から乗り換えている（乗ったままと同じ）なら降りられない
+    const ct = sameTrackOf(leg);
+    const prev = st.steps[st.steps.length - 1];
+    if (ct && prev && prev.kind === 'rail' && prev.to === leg.from && prev.routes.some((r) => ct.routes.includes(r))) return null;
+    // JOB11：上野東京ラインの直通電車と、その分岐先での同じ電車（throughOf）とを乗り継ぐ（＝乗ったままと同じ）なら降りられない
+    if (prev && prev.kind === 'rail' && prev.to === leg.from && sameTrainContinues(prev, leg)) return null;
+    return leg;
+  };
+
+  const finish = (steps, gFinal) => {
+    stats.completed++;
+    const cost = patternCost(steps);
+    if (cost < best) best = cost;
+    results.push({ steps, cost, g: gFinal });
+  };
+
+  push({
+    station: origin, g: 0, steps: [], cur: null, visited: new Set([origin]),
+    usedRoutes: new Set(), railCount: 0, closedG: 0,
+  });
+
+  while (heap.size && results.length < opts.maxPaths && stats.expanded < opts.maxExpansions) {
+    const st = heap.pop();
+    if (Number.isFinite(best) && st.f > costCap(best, opts)) break;
+    const dkey = `${signature(st.steps)}|${st.station}|${st.cur ? `${st.cur.route}@${st.cur.from}` : '-'}`;
+    const prev = seen.get(dkey);
+    if (prev !== undefined && prev <= st.g) continue;
+    seen.set(dkey, st.g);
+    stats.expanded++;
+
+    const X = st.station;
+    const lastWalk = st.steps.length > 0 && st.steps[st.steps.length - 1].kind === 'walk' && !st.cur;
+
+    // 乗車中 leg を確定した後の状態（乗換・徒歩・到着の前処理）
+    let closed = null; // { steps, g, usedRoutes }
+    if (st.cur) {
+      const leg = closeLeg(st);
+      if (leg) {
+        closed = {
+          steps: [...st.steps, leg],
+          g: st.closedG + leg.rideMin + leg.wait,
+          // JOB10：共用区間 leg の後は区間の全路線を使用済みにする（区間内の乗換・区間への乗り直しをしない）
+          usedRoutes: new Set([...st.usedRoutes, ...routeParts(st.cur.route), ...(sameTrackOf(leg) ? sameTrackOf(leg).routes : [])]),
+          railCount: st.railCount,
+        };
+      }
+    } else {
+      closed = { steps: st.steps, g: st.closedG, usedRoutes: st.usedRoutes, railCount: st.railCount };
+    }
+
+    // 1) 同じ路線で乗り続ける
+    if (st.cur) {
+      const nb = net.adj.get(st.cur.route).get(X);
+      for (const [Y, w] of nb || []) {
+        if (st.visited.has(Y)) continue;
+        const cur = { ...st.cur, ride: st.cur.ride + w, path: [...st.cur.path, Y] };
+        const ns = { ...st, station: Y, cur, g: st.closedG + cur.ride, visited: new Set([...st.visited, Y]) };
+        if (Y === dest) {
+          const leg = closeLeg(ns);
+          if (leg) {
+            const steps = [...st.steps, leg];
+            finish(steps, ns.g);
+          }
+        } else {
+          push(ns);
+        }
+      }
+    }
+
+    if (!closed) continue; // 種別集合が空の leg では降りられない
+
+    // 2) 別の路線に乗る（同一駅乗換 or 徒歩連絡の直後 or 出発駅）
+    if (closed.railCount < opts.maxRailLegs) {
+      const penalty = st.cur ? TRANSFER_PENALTY : 0;
+      for (const [route, m] of net.adj) {
+        // 使った路線（直通系統は構成路線2本とも）には乗り直さない
+        if (routeParts(route).some((r) => closed.usedRoutes.has(r))) continue;
+        if (st.cur && route === st.cur.route) continue;
+        const nb = m.get(X);
+        for (const [Y, w] of nb || []) {
+          if (st.visited.has(Y)) continue;
+          const cur = { route, from: X, ride: w, path: [X, Y] };
+          const baseG = closed.g + penalty;
+          const ns = {
+            station: Y, cur, steps: closed.steps, usedRoutes: closed.usedRoutes,
+            railCount: closed.railCount + 1, closedG: baseG, g: baseG + w,
+            visited: new Set([...st.visited, Y]),
+          };
+          if (Y === dest) {
+            const leg = closeLeg(ns);
+            if (leg) {
+              const steps = [...closed.steps, leg];
+              finish(steps, ns.g);
+            }
+          } else {
+            push(ns);
+          }
+        }
+      }
+    }
+
+    // 3) 徒歩連絡（連続徒歩は不可）
+    if (!lastWalk) {
+      for (const wk of net.walks.get(X) || []) {
+        const Y = wk.to;
+        if (st.visited.has(Y)) continue;
+        const steps = [...closed.steps, { kind: 'walk', from: X, to: Y, min: wk.min }];
+        const g = closed.g + wk.min;
+        if (Y === dest) {
+          finish(steps, g);
+        } else {
+          push({
+            station: Y, cur: null, steps, usedRoutes: closed.usedRoutes, railCount: closed.railCount,
+            closedG: g, g, visited: new Set([...st.visited, Y]),
+          });
+        }
+      }
+    }
+  }
+
+  return { results, stats, best: Number.isFinite(best) ? best : undefined, cap: Number.isFinite(best) ? costCap(best, opts) : undefined };
+}
+
+// ---------- 変種の畳み込み ----------
+// コリドー内の路線どうしを共有駅で乗り継ぐだけの組（例：船橋→錦糸町を快速/各停、錦糸町で各停に乗換→秋葉原）は
+// DESIGN.md §3 #2 の「変種」として、乗り継がない基本形（各停 船橋→秋葉原）に畳む。
+function tryFold(net, steps) {
+  for (let i = 0; i + 1 < steps.length; i++) {
+    const L1 = steps[i];
+    const L2 = steps[i + 1];
+    if (L1.kind !== 'rail' || L2.kind !== 'rail' || L1.route === L2.route) continue;
+    // JOB6：直通 leg は乗り継ぐ駅の側の構成路線でコリドーを見る（例：総武コリドー 船橋→市川 → 総武快速・横須賀線直通 市川→逗子）
+    const r1 = L1.through ? L1.through.routes[1] : L1.route;
+    const r2 = L2.through ? L2.through.routes[0] : L2.route;
+    for (const c of CORRIDORS) {
+      if (!c.routes.includes(r1) || !c.routes.includes(r2)) continue;
+      if (!c.shared.includes(L1.to)) continue;
+      const full1 = c.shared.includes(L1.from) && c.shared.includes(L1.to);
+      const full2 = c.shared.includes(L2.from) && c.shared.includes(L2.to);
+      let target;
+      if (full1) target = L2.route;
+      else if (full2) target = L1.route;
+      else continue;
+      const others = steps.filter((s, j) => s.kind === 'rail' && j !== i && j !== i + 1);
+      if (others.some((s) => s.route === target)) continue;
+      const merged = computeLeg(net, target, L1.from, L2.to, [...L1.stations, ...L2.stations.slice(1)]);
+      if (!merged.systems.some((s) => s.route === target)) continue;
+      return [...steps.slice(0, i), merged, ...steps.slice(i + 2)];
+    }
+  }
+  return null;
+}
+
+function foldVariants(net, steps) {
+  let cur = steps;
+  for (;;) {
+    const next = tryFold(net, cur);
+    if (!next) return cur;
+    cur = next;
+  }
+}
+
+// ---------- パターン列挙（公開 API） ----------
+
+function enumeratePatterns(origin, dest, { suspended = [], ...options } = {}) {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const net = buildNetwork(suspended, { tierSplit: opts.tierSplit });
+  const { results, stats, best, cap } = enumeratePaths(net, origin, dest, opts);
+  if (best === undefined) {
+    return { origin, dest, suspended: net.suspended, best, cap, patterns: [], stats: { ...stats, inCap: 0, distinct: 0 } };
+  }
+  const inCap = results.filter((r) => r.cost <= cap + 1e-9);
+
+  // signature で重複排除（最安を残す。同額なら駅数の少ない方）
+  const bySig = new Map();
+  for (const r of inCap) {
+    const sig = signature(r.steps);
+    const prev = bySig.get(sig);
+    if (!prev || r.cost < prev.cost - 1e-9 || (Math.abs(r.cost - prev.cost) < 1e-9 && r.g < prev.g)) {
+      bySig.set(sig, { ...r, sig });
+    }
+  }
+
+  // 変種を基本形に畳んでグループ化
+  const groups = new Map();
+  let discarded = 0;
+  for (const r of bySig.values()) {
+    const baseSteps = foldVariants(net, r.steps);
+    const baseSig = signature(baseSteps);
+    if (!groups.has(baseSig)) {
+      groups.set(baseSig, { sig: baseSig, steps: baseSteps, baseCost: patternCost(baseSteps), variants: [] });
+    }
+    if (r.sig === baseSig) continue;
+    // 修正2：コリドー内で路線を替えるだけの変種は数えずに捨てる
+    if (signature(mergeCorridorLegs(r.steps)) === baseSig) {
+      discarded++;
+      continue;
+    }
+    groups.get(baseSig).variants.push({ sig: r.sig, steps: r.steps, cost: r.cost });
+  }
+
+  // 修正1：パターンの代表コスト＝基本形と全変種のうち最小。並び順・見出しはこれで出す
+  for (const g of groups.values()) {
+    g.cost = Math.min(g.baseCost, ...g.variants.map((v) => v.cost));
+  }
+
+  // 支配は推移的で循環しない（生き残り条件の厳密な包含）ので、他のどれかに支配されるものを落とせばよい。
+  // 同額のときに並び順の後ろのものが前を支配する場合があるので、全組で比べる
+  const sorted = [...groups.values()].sort((a, b) => a.cost - b.cost);
+  const kept = opts.dropDominated ? sorted.filter((g) => !sorted.some((q) => q !== g && dominates(q, g))) : sorted;
+  const dominated = sorted.length - kept.length;
+  const patterns = kept
+    .slice(0, opts.maxPatterns)
+    .map((g, i) => decoratePattern(g, i + 1));
+
+  return {
+    origin, dest, suspended: net.suspended, best, cap, patterns,
+    stats: { ...stats, inCap: inCap.length, distinct: bySig.size, groups: groups.size, discarded, dominated },
+  };
+}
+
+// 依存路線（leg ごとの「どれか1つ生きていれば乗れる路線」の集合）
+// JOB6：直通 leg は構成路線が2本とも生きている必要があるので、1本ずつの集合2つとして数える
+// JOB12：依存路線が複数の系統（上野東京ラインの直通電車）を含む leg は、「どれかの系統の依存路線が全部生きている」を
+// 「どれか1つ生きていれば」の集合の並び（全部を満たす）に直す。例：東京→大宮 は [上野東京][高崎線, 宇都宮線]
+// JOB13：系統ごとの依存路線は、その leg で乗る区間の分だけ（computeLeg の deps）。湘南新宿ラインの leg も同じ形になる
+const LEG_DEPS = new WeakMap();
+function legDeps(leg) {
+  if (!LEG_DEPS.has(leg)) LEG_DEPS.set(leg, computeLegDeps(leg));
+  return LEG_DEPS.get(leg);
+}
+
+function computeLegDeps(leg) {
+  if (leg.through) return leg.through.routes.map((r) => [r]);
+  const per = leg.systems.map((x) => x.deps || [x.route]);
+  if (per.every((d) => d.length === 1)) return [leg.routes];
+  // 系統ごとの依存路線から1本ずつ選ぶ全組み合わせ（各組み合わせが「どれか1つ」の集合）を作り、他を含む集合は外す
+  let sets = [[]];
+  for (const d of per) sets = sets.flatMap((acc) => d.map((r) => (acc.includes(r) ? acc : [...acc, r])));
+  sets = sets.map((x) => [...new Set(x)]);
+  const minimal = sets.filter((x, i) => !sets.some((y, j) => (y.length < x.length || (y.length === x.length && j < i))
+    && y.every((r) => x.includes(r))));
+  // 表示の並びは leg.routes の順を先に、それ以外は登場順
+  const order = [...leg.routes, ...per.flat()];
+  const rank = (r) => order.indexOf(r);
+  return minimal.map((x) => [...x].sort((a, b) => rank(a) - rank(b))).sort((a, b) => a.length - b.length || rank(a[0]) - rank(b[0]));
+}
+
+// 支配フィルタ用の生き残り条件。JOB13：表示の依存路線（legDeps、伝播込み）と同じもので数える
+function legRouteSets(steps) {
+  return steps.filter((s) => s.kind === 'rail').flatMap(legDeps);
+}
+
+// p が生き残るどの見合わせ状況でも q も生き残るか。生き残り条件は「全 leg に、止まっていない路線が1つ以上ある」。
+// これは「q のどの leg Lq にも、Lq に含まれる p の leg Lp がある」と同値（Lq の路線が全部止まれば Lp も全部止まる）
+function survivesWhenever(q, p) {
+  const lp = legRouteSets(p.steps);
+  return legRouteSets(q.steps).every((lq) => lp.some((l) => l.every((r) => lq.includes(r))));
+}
+
+// q が p を支配する：q の方が速いか同じで、p が生き残る状況では q も必ず生き残り、かつ逆は成り立たない
+// （p の方が止まりやすい）。生き残り条件が同じもの（同じ路線で乗換駅だけ違う等）は別パターンとして残す
+function dominates(q, p) {
+  if (q.cost > p.cost + 1e-9) return false;
+  if (hasSiblingDetour(q, p) || hasSeparateTrackThrough(q, p) || hasBridgedBoarding(q, p)) return false;
+  return survivesWhenever(q, p) && !survivesWhenever(p, q);
+}
+
+// 路線ごとの停車駅（全系統の和）
+const ROUTE_STATIONS = new Map();
+for (const s of SYSTEMS) {
+  if (!ROUTE_STATIONS.has(s.route)) ROUTE_STATIONS.set(s.route, new Set());
+  for (const x of s.stops) ROUTE_STATIONS.get(s.route).add(x.station);
+}
+
+// 路線への乗車の一覧：{ route, at（乗車駅）, via（その駅に着いた路線。徒歩連絡の後や出発駅では空） }。
+// 直通 leg は構成路線ごとに分け、後半の路線は境界駅で前半の路線から乗り継いだものとして数える
+function boardings(steps) {
+  const out = [];
+  let prev = null;
+  for (const s of steps) {
+    if (s.kind !== 'rail') { prev = null; continue; }
+    const via = prev && prev.to === s.from ? (prev.through ? [prev.through.routes[1]] : prev.routes) : [];
+    if (s.through) {
+      out.push({ route: s.through.routes[0], at: s.from, via });
+      out.push({ route: s.through.routes[1], at: s.through.boundary, via: [s.through.routes[0]] });
+    } else {
+      for (const r of s.routes) out.push({ route: r, at: s.from, via });
+    }
+    prev = s;
+  }
+  return out;
+}
+
+// JOB7b：p が、q と共通の路線 L に q と違う駅から乗り、その駅へ q の使わない路線（橋渡し路線）で着いているか
+// （例：自由が丘→浦和 の 渋谷から湘南新宿 に対して、東横→中目黒→日比谷線→恵比寿から湘南新宿）。
+// ただし q の乗車駅と p の乗車駅の両方に橋渡し路線が停まる場合（共用区間の中で乗換駅をずらしただけ。
+// 例：大岡山→四ツ谷 の 目黒線・三田線直通→白金台→南北線）は当てない。降車駅の違いだけでも当てない
+function hasBridgedBoarding(q, p) {
+  const qb = boardings(q.steps);
+  const qRoutes = new Set(qb.map((b) => b.route));
+  return boardings(p.steps).some((b) => {
+    const qAt = qb.filter((x) => x.route === b.route).map((x) => x.at);
+    if (!qAt.length || qAt.includes(b.at)) return false;
+    const bridges = b.via.filter((r) => !qRoutes.has(r));
+    if (!bridges.length) return false;
+    return !bridges.some((r) => {
+      const st = ROUTE_STATIONS.get(r);
+      return st && st.has(b.at) && qAt.some((a) => st.has(a));
+    });
+  });
+}
+
+// JOB6：p の直通 leg と同じ両端を、境界駅を通らない系統だけで結ぶ leg が q にあるか
+// （例：北千住→松戸 の 常磐線快速 と 千代田線・常磐線直通（綾瀬経由の各停））。data では快速と各停が同じ路線（joban）だが
+// 線路も電車も別なので、快速が生きていることを理由に直通を消さない
+function hasSeparateTrackThrough(q, p) {
+  return p.steps.some((lp) => lp.kind === 'rail' && lp.through && q.steps.some((lq) => lq.kind === 'rail' && !lq.through
+    && ((lq.from === lp.from && lq.to === lp.to) || (lq.from === lp.to && lq.to === lp.from))
+    && lq.systems.every((s) => !SYSTEM_BY_ID.get(s.id).stops.some((x) => x.station === lp.through.boundary))));
+}
+
+// JOB6：p が q の直通 leg の「別の直通先」を使い、q の直通系統の駅で乗り換えて戻る形か
+// （例：大岡山→四ツ谷 の 目黒線・南北線直通 に対して、目黒線・三田線直通 で白金高輪まで行き南北線に乗り換える形）。
+// 同じ駅から同じ路線に乗り、先に来た方の直通に乗れるという選択肢なので、支配では消さない
+function hasSiblingDetour(q, p) {
+  const tq = q.steps.filter((s) => s.kind === 'rail' && s.through);
+  if (!tq.length) return false;
+  return p.steps.some((lp) => lp.kind === 'rail' && lp.through && tq.some((lq) => isSiblingThrough(lp, lq)));
+}
+
+// 端駅 e 側の構成路線
+const sideRoute = (leg, e) => (e === leg.from ? leg.through.routes[0] : leg.through.routes[1]);
+
+function isSiblingThrough(lp, lq) {
+  if (lp.route === lq.route || lp.through.boundary !== lq.through.boundary) return false;
+  for (const e of [lp.from, lp.to]) {
+    if (e !== lq.from && e !== lq.to) continue;
+    if (sideRoute(lp, e) !== sideRoute(lq, e)) continue;
+    // もう一方の端が、2つの直通系統が分かれる駅（q の系統の駅で、p の系統でその先の駅は q の系統に無い）であること
+    const other = e === lp.from ? lp.to : lp.from;
+    const qs = THROUGH_STATIONS.get(lq.route);
+    if (!qs.has(other)) continue;
+    const stops = THROUGH_BY_ID.get(lp.route).systems.find((s) => [other, e].every((st) => s.stops.some((x) => x.station === st))).stops;
+    const i = stops.findIndex((x) => x.station === other);
+    const next = stops[i + Math.sign(i - stops.findIndex((x) => x.station === e))];
+    if (next && !qs.has(next.station)) return true;
+  }
+  return false;
+}
+
+// 連続する同一コリドーの鉄道 leg を1本に結合した step 列（signature 比較用。leg の中身は再計算しない）
+function mergeCorridorLegs(steps) {
+  const out = [];
+  for (const s of steps) {
+    const prev = out[out.length - 1];
+    if (s.kind === 'rail' && s.corridor && prev && prev.kind === 'rail' && prev.corridor === s.corridor) {
+      out[out.length - 1] = { ...prev, to: s.to, stations: [...prev.stations, ...s.stations.slice(1)] };
+    } else {
+      out.push(s);
+    }
+  }
+  return out;
+}
+
+function decoratePattern(g, rank) {
+  const rails = g.steps.filter((s) => s.kind === 'rail');
+  const variants = g.variants
+    .sort((a, b) => a.cost - b.cost)
+    .map((v) => ({ ...v, costMax: patternCost(v.steps, 'rideMax'), stations: patternStations(v.steps) }));
+  // 見出しに使う経路：基本形が最安ならそれ、そうでなければ最安の変種（同額なら基本形）
+  const fastestVariant = variants.length && variants[0].cost < g.baseCost - 1e-9 ? variants[0] : null;
+  if (fastestVariant) fastestVariant.fastest = true;
+  const baseCostMax = patternCost(g.steps, 'rideMax');
+  return {
+    rank,
+    signature: g.sig,
+    steps: g.steps,
+    // 代表コスト（基本形と変種の最小）。costMax は代表の経路を最遅種別で乗った場合
+    cost: g.cost,
+    costMax: fastestVariant ? fastestVariant.costMax : baseCostMax,
+    fastest: fastestVariant ? 'variant' : 'base',
+    baseCost: g.baseCost,
+    baseCostMax,
+    railLegs: rails.length,
+    transfers: Math.max(0, rails.length - 1),
+    walks: g.steps.filter((s) => s.kind === 'walk').length,
+    // 依存路線：leg ごとに「どれか1つ生きていれば乗れる路線」の集合（直通 leg は構成路線1本ずつの集合2つ）
+    dependsOn: rails.flatMap(legDeps),
+    stations: patternStations(g.steps),
+    variants,
+  };
+}
+
+// ---------- 便層（JOB14：モデル便をパターンに上乗せする） ----------
+
+// 見合わせ状況ごとのネットワーク（便の系統は、パターン層と同じ buildNetwork の系統＝間隔・停車駅・直通・見合わせ・打ち切り込み）
+const TRIP_NETS = new Map();
+function tripNet(suspended) {
+  const key = [...new Set(suspended)].sort().join(',');
+  if (!TRIP_NETS.has(key)) TRIP_NETS.set(key, buildNetwork([...new Set(suspended)]));
+  return TRIP_NETS.get(key);
+}
+
+// leg で便を立てる系統（ネットワーク上の系統。打ち切り系統は from・to の両方に停まるもの）。
+// 日中運行の系統があればそれだけを使い、日中運行なし（※）の系統には便を立てない（パターン層の間隔と同じ扱い）
+function tripSystems(net, leg) {
+  const daytime = leg.systems.filter((x) => x.daytime);
+  const ids = (daytime.length ? daytime : leg.systems).map((x) => x.id);
+  return ids.flatMap((id) => net.systems.filter((s) => s.id === id
+    && s.stops.some((x) => x.station === leg.from) && s.stops.some((x) => x.station === leg.to)));
+}
+
+const railTrip = (leg, sys, trip) => ({
+  kind: 'rail', from: leg.from, to: leg.to, dep: trip.dep, arr: trip.arr,
+  system: sys.id, routeName: sys.routeName, type: sys.type, interval: sys.interval,
+});
+
+// パターン（steps）に便を当てる。time は分（24時以降は 1440 からの続き）、mode は 'dep'（出発指定）か 'arr'（到着指定）。
+// - 出発指定：最初の鉄道 leg は time 以降、以降の leg は「前の leg の到着＋乗換（同一駅は TRANSFER_PENALTY、徒歩連絡は徒歩分）」以降に出る便
+// - 到着指定：逆向きにたどり、time までに着く便
+// - 便の選択（JOB14b）：出発指定は、乗車可能時刻以降に出る候補便（leg の全系統）のうち最も早く着く便。同着なら先に発つ方。
+//   到着指定は、指定時刻（次の leg の発車−乗換）までに着く候補便のうち最も遅く出られる便。同発なら早く着く方。いずれも同じならデータ順。
+//   系統ごとの候補は firstTripAfter / lastTripBefore の1本（同じ系統・向きの便は乗車分が同じなので、早く出る便ほど早く着く）
+// - shift：出発指定は最初の鉄道 leg、到着指定は最後の鉄道 leg の便を、選んだ系統の n 本後（負なら前）にずらして残りを再計算する
+// - 先頭・末尾の徒歩連絡は最初の便の発車・最後の便の到着に詰める（全体の出発・到着＝最初の step の開始・最後の step の終了）
+// 便が立たない（運行窓の外・見合わせ）ときは { ok: false, reason: '運行時間外' }
+function planTrips(steps, { time, mode = 'dep', shift = 0, suspended = [] } = {}) {
+  const none = { ok: false, reason: '運行時間外' };
+  const net = tripNet(suspended);
+  const n = steps.length;
+  const railIdx = steps.map((s, i) => (s.kind === 'rail' ? i : -1)).filter((i) => i >= 0);
+  if (!railIdx.length && shift) return none;
+  const pivot = mode === 'arr' ? railIdx[railIdx.length - 1] : railIdx[0];
+  const out = new Array(n);
+  const pickFor = (leg, i, find, better) => {
+    let pick = null;
+    for (const sys of tripSystems(net, leg)) {
+      const trip = find(sys);
+      if (trip && (!pick || better(trip, pick.trip))) pick = { sys, trip };
+    }
+    if (pick && i === pivot && shift) pick = { sys: pick.sys, trip: shiftTrip(pick.sys, pick.trip, shift) };
+    return pick && pick.trip ? pick : null;
+  };
+  if (mode === 'arr') {
+    let t = time;
+    for (let i = n - 1; i >= 0; i--) {
+      const s = steps[i];
+      if (s.kind === 'walk') {
+        out[i] = { kind: 'walk', from: s.from, to: s.to, min: s.min, dep: t - s.min, arr: t };
+        t -= s.min;
+        continue;
+      }
+      const limit = t - (i + 1 < n && steps[i + 1].kind === 'rail' ? TRANSFER_PENALTY : 0);
+      const pick = pickFor(s, i, (sys) => lastTripBefore(sys, s.from, s.to, limit),
+        (a, b) => a.dep > b.dep || (a.dep === b.dep && a.arr < b.arr));
+      if (!pick) return none;
+      out[i] = railTrip(s, pick.sys, pick.trip);
+      t = pick.trip.dep;
+    }
+  } else {
+    let t = time;
+    for (let i = 0; i < n; i++) {
+      const s = steps[i];
+      if (s.kind === 'walk') {
+        out[i] = { kind: 'walk', from: s.from, to: s.to, min: s.min, dep: t, arr: t + s.min };
+        t += s.min;
+        continue;
+      }
+      const ready = t + (i > 0 && steps[i - 1].kind === 'rail' ? TRANSFER_PENALTY : 0);
+      const pick = pickFor(s, i, (sys) => firstTripAfter(sys, s.from, s.to, ready),
+        (a, b) => a.arr < b.arr || (a.arr === b.arr && a.dep < b.dep));
+      if (!pick) return none;
+      out[i] = railTrip(s, pick.sys, pick.trip);
+      t = pick.trip.arr;
+    }
+  }
+  // 先頭の徒歩連絡は最初の便に間に合うように出る形、末尾の徒歩連絡は最後の便を降りてすぐ歩く形に詰める
+  if (railIdx.length) {
+    for (let i = railIdx[0] - 1; i >= 0; i--) out[i] = { ...out[i], arr: out[i + 1].dep, dep: out[i + 1].dep - out[i].min };
+    for (let i = railIdx[railIdx.length - 1] + 1; i < n; i++) out[i] = { ...out[i], dep: out[i - 1].arr, arr: out[i - 1].arr + out[i].min };
+  }
+  return { ok: true, mode, time, shift, dep: out[0].dep, arr: out[n - 1].arr, steps: out };
+}
+
+// 時刻入力（"HH:MM"）を分にする。0:00〜2:59 は運行日の続き（24:00〜26:59）として数える。書式が不正なら undefined
+const CLOCK_ROLLOVER = 3 * 60;
+function parseClock(text) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(text).trim());
+  if (!m) return undefined;
+  const h = Number(m[1]);
+  const mi = Number(m[2]);
+  if (h > 23 || mi > 59) return undefined;
+  const t = h * 60 + mi;
+  return t < CLOCK_ROLLOVER ? t + 1440 : t;
+}
+
+// 分を "HH:MM" にする（24時以降は 0時台として出す）
+function fmtClock(t) {
+  const m = ((Math.round(t) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+
+// ---------- 表示用ヘルパ（UI・REPORT 共通） ----------
+
+function routeShort(id) {
+  const r = routeInfo(id);
+  return r ? r.short : id;
+}
+
+// 種別集合の表示：優等をまとめ、各停系は「も可」で併記
+function typeSetLabel(leg) {
+  const byRoute = new Map();
+  for (const s of leg.systems) {
+    if (!byRoute.has(s.route)) byRoute.set(s.route, []);
+    byRoute.get(s.route).push(s);
+  }
+  const parts = [];
+  for (const [route, syss] of byRoute) {
+    const names = (list) => [...new Set(list.map((s) => s.type + (s.daytime ? '' : '※')))].join('・');
+    const yuto = syss.filter((s) => s.tier === 'yuto');
+    const local = syss.filter((s) => s.tier === 'local');
+    let label;
+    if (yuto.length && local.length) label = `${names(yuto)}（${names(local)}も可）`;
+    else label = names(syss);
+    parts.push(byRoute.size > 1 ? `${routeShort(route)} ${label}` : label);
+  }
+  return parts.join(' ／ ');
+}
+
+function fmtMin(x) {
+  return Number.isInteger(x) ? String(x) : x.toFixed(1);
+}
+
+function rangeText(list) {
+  const lo = Math.min(...list);
+  const hi = Math.max(...list);
+  return lo === hi ? `${lo}分` : `${lo}〜${hi}分`;
+}
+
+// 所要範囲。優等と各停系が混ざる leg は、全体範囲に加えて内訳を併記する
+// （修正3で優等だけに絞った leg は優等の範囲のみ。各停系は localNoteLabel で併記）
+function rideLabel(leg) {
+  const all = rangeText(leg.systems.map((s) => s.ride));
+  const yuto = leg.systems.filter((s) => s.tier === 'yuto').map((s) => s.ride);
+  if (leg.intervalBasis === 'yuto') return rangeText(yuto);
+  const local = leg.systems.filter((s) => s.tier === 'local').map((s) => s.ride);
+  if (!yuto.length || !local.length || rangeText(yuto) === rangeText(local)) return all;
+  return `${all}（優等 ${rangeText(yuto)}／各停系 ${rangeText(local)}）`;
+}
+
+function intervalText(interval, daytime) {
+  const v = fmtMin(Math.round(interval * 10) / 10);
+  return daytime ? `約${v}分おき` : `約${v}分おき（日中運行なし）`;
+}
+
+function intervalLabel(leg) {
+  return intervalText(leg.interval, leg.intervalDaytime);
+}
+
+// 修正3：優等だけで計算した leg の各停系の併記（該当しなければ空文字）
+function localNoteLabel(leg) {
+  const n = leg.localNote;
+  if (!n) return '';
+  const ride = n.rideMin === n.rideMax ? `約${n.rideMin}分` : `約${n.rideMin}〜${n.rideMax}分`;
+  return `各停系 ${intervalText(n.interval, n.intervalDaytime)}・${ride}`;
+}
+
+// JOB4 で足した路線は両数の表（CAR_COUNTS）に載せていない（推測の値は入れない）ので「未登録」と出す
+function carCountLabel(leg) {
+  const count = (r) => CAR_COUNTS[r] ?? '未登録';
+  const routes = leg.through ? leg.through.routes : leg.routes;
+  return routes.map((r) => (routes.length > 1 ? `${routeShort(r)} ${count(r)}` : count(r))).join('／');
+}
+
+// JOB6：直通 leg は乗る順に「目黒線・南北線 直通」
+// JOB10：共用区間（label を持つコリドー）の leg は、全路線が集合に入っていれば路線集合の表示にする
+function legRouteLabel(leg) {
+  if (leg.through) return `${leg.through.routes.map(routeShort).join('・')} 直通`;
+  const c = leg.corridor && CORRIDORS.find((x) => x.id === leg.corridor);
+  // JOB12：上野東京ラインの見合わせで直通電車（throughOf の系統）が抜けた leg は、直通を含む旨を付けない（plainLabel）
+  const hasThrough = leg.systems.some((x) => SYSTEM_BY_ID.get(x.id) && SYSTEM_BY_ID.get(x.id).throughLabel);
+  if (c && c.label && c.routes.every((r) => leg.routes.includes(r))) return hasThrough || !c.plainLabel ? c.label : c.plainLabel;
+  // JOB11：上野東京ラインの直通電車（throughOf の系統）を含む leg は路線名に直通を含む旨を付ける
+  // JOB13：湘南新宿ラインの直通分も同じ。両方を含む leg は「（上野東京ライン・湘南新宿ライン直通を含む）」
+  const via = (r) => {
+    const names = [...new Set(leg.systems.filter((x) => x.route === r && SYSTEM_BY_ID.get(x.id) && SYSTEM_BY_ID.get(x.id).throughName)
+      .map((x) => SYSTEM_BY_ID.get(x.id).throughName))];
+    return names.length ? `${routeInfo(r).name}（${names.join('・')}直通を含む）` : routeInfo(r).name;
+  };
+  return leg.routes.map(via).join(' または ');
+}
+
+// JOB6：直通 leg の境界駅の注記（例：「目黒から南北線」）。直通でなければ空文字
+function throughNoteLabel(leg) {
+  return leg.through ? `${leg.through.boundary}から${routeShort(leg.through.routes[1])}` : '';
+}
+
+function stepsText(steps) {
+  return steps
+    .map((s) => (s.kind === 'walk' ? `徒歩 ${s.from}→${s.to}(${s.min}分)` : `${leg2short(s)} ${s.from}→${s.to}`))
+    .join(' → ');
+}
+
+function leg2short(leg) {
+  if (leg.through) return `${leg.through.routes.map(routeShort).join('・')}直通`;
+  return leg.routes.map(routeShort).join('/');
+}
+
+// パターン一覧をプレーンテキストにする（REPORT 貼り付け・デバッグ用）
+function formatResult(res) {
+  const lines = [];
+  const off = res.suspended.length ? `（見合わせ: ${res.suspended.map(routeShort).join('・')}）` : '';
+  lines.push(`${res.origin} → ${res.dest}${off}`);
+  if (!res.patterns.length) {
+    lines.push('  パターンなし');
+    return lines.join('\n');
+  }
+  lines.push(`  最良 ${fmtMin(res.best)}分 / 上限 ${fmtMin(res.cap)}分 / 列挙 ${res.stats.completed}本・上限内 ${res.stats.inCap}本・signature ${res.stats.distinct}種・パターン ${res.stats.groups}件・破棄変種 ${res.stats.discarded}本・被支配 ${res.stats.dominated}件`);
+  for (const p of res.patterns) {
+    const range = p.cost === p.costMax ? '' : `（〜${fmtMin(p.costMax)}）`;
+    const walk = p.walks ? `＋徒歩連絡${p.walks}` : '';
+    lines.push(`#${p.rank} 約${fmtMin(p.cost)}分${range} 乗換${p.transfers}回${walk}  依存: ${p.dependsOn.map((rs) => rs.map(routeShort).join('か')).join('＋')}`);
+    for (const s of p.steps) {
+      if (s.kind === 'walk') {
+        lines.push(`    徒歩連絡 ${s.from}→${s.to} ${s.min}分`);
+      } else {
+        const local = s.localNote ? `（${localNoteLabel(s)}）` : '';
+        const thru = s.through ? `（${throughNoteLabel(s)}）` : '';
+        lines.push(`    ${legRouteLabel(s)}${thru} ${s.from}→${s.to} [${typeSetLabel(s)}] ${rideLabel(s)} ${intervalLabel(s)}${local} ${carCountLabel(s)}`);
+      }
+    }
+    if (p.fastest === 'variant') lines.push(`    （基本形 約${fmtMin(p.baseCost)}分。見出しは最速の変種）`);
+    for (const v of p.variants) {
+      lines.push(`    変種 約${fmtMin(v.cost)}分${v.fastest ? '（最速）' : ''}: ${stepsText(v.steps)}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+// ---- app.js ----
+// 乗換パターン v0 UI。ロジックは logic.mjs（Node テストと共通）
+
+const $ = (id) => document.getElementById(id);
+const originInput = $('origin');
+const destInput = $('dest');
+// JOB14：時刻（任意）と出発／到着の切替
+const timeInput = $('time');
+const modeArr = $('mode-arr');
+const MODEL_NOTE = '時刻は運行間隔から生成したモデル便です（実際の時刻表ではありません）。';
+const suspended = new Set();
+// 入力の確定時に照合する登録駅（data の全駅。完全一致のみ受け付ける）
+const STATIONS = allStations();
+const STATION_SET = new Set(STATIONS);
+
+function el(tag, attrs = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') e.className = v;
+    else e.setAttribute(k, v);
+  }
+  for (const c of children) if (c !== null && c !== undefined) e.append(c);
+  return e;
+}
+
+// たてしま：90deg の repeating-linear-gradient で各色の縦帯を横方向に順に並べる（band は1帯の幅 px）
+const stripeBackground = (colors, band) => `repeating-linear-gradient(90deg, ${colors
+  .map((c, i) => `${c} ${i ? `${i * band}px` : '0'} ${(i + 1) * band}px`).join(', ')})`;
+
+// 路線色の background 値。単色はベタ、stripe 形式の路線はたてしま
+function lineBackground(routeId, band) {
+  const c = LINE_COLORS[routeId];
+  if (!c) return 'transparent';
+  return c.style === 'stripe' ? stripeBackground(c.colors, band) : c.colors[0];
+}
+
+function lineSwatch(cls, routeId, band) {
+  const c = LINE_COLORS[routeId];
+  return el('span', {
+    class: cls,
+    'data-route': routeId,
+    'data-style': c ? c.style : 'none',
+    'data-colors': c ? c.colors.join(' ') : '',
+    'aria-hidden': 'true',
+    style: `background: ${lineBackground(routeId, band)}`,
+  });
+}
+
+// コリドー leg のバー：併記される路線の色をたてしまにする
+// JOB10：同じ色の路線（高崎線・宇都宮線）は1帯にまとめる
+function corridorBar(routeIds, band) {
+  const colors = [...new Set(routeIds.map((r) => (LINE_COLORS[r] ? LINE_COLORS[r].colors[0] : 'transparent')))];
+  return el('span', {
+    class: 'bar',
+    'data-route': routeIds.join(' '),
+    'data-style': 'stripe',
+    'data-colors': colors.join(' '),
+    'aria-hidden': 'true',
+    style: `background: ${stripeBackground(colors, band)}`,
+  });
+}
+
+// JOB6：直通 leg のバー：途切れない1本を縦に2段（上段＝前半路線の色、下段＝後半路線の色）。
+// 段の境目は境界駅までの乗車時間の割合。たてしま（コリドー）とは別物なので data-style も 'through' にする
+function throughBar(through) {
+  const colors = through.routes.map((r) => (LINE_COLORS[r] ? LINE_COLORS[r].colors[0] : 'transparent'));
+  const pct = Math.round(through.firstRatio * 100);
+  return el('span', {
+    class: 'bar',
+    'data-route': through.routes.join(' '),
+    'data-style': 'through',
+    'data-colors': colors.join(' '),
+    'data-split': String(pct),
+    'aria-hidden': 'true',
+    style: `background: linear-gradient(180deg, ${colors[0]} 0 ${pct}%, ${colors[1]} ${pct}% 100%)`,
+  });
+}
+
+// 見合わせトグル・依存路線の色チップ（路線名テキストの前に置く）
+const lineChip = (routeId) => lineSwatch('chip', routeId, 3);
+
+// 駅名の候補リスト（ネイティブ datalist は候補が多すぎてキーボードに重なるため自前にした）
+const MAX_SUGGEST = 6;
+
+// 入力中の文字列に合う駅名。前方一致を先、次に部分一致。最大 MAX_SUGGEST 件
+function suggestStations(query) {
+  const q = query.trim();
+  if (!q) return [];
+  const prefix = STATIONS.filter((s) => s.startsWith(q));
+  const partial = STATIONS.filter((s) => !s.startsWith(q) && s.includes(q));
+  return [...prefix, ...partial].slice(0, MAX_SUGGEST);
+}
+
+function attachSuggest(input, list) {
+  const close = () => { list.hidden = true; list.replaceChildren(); };
+  const update = () => {
+    const names = suggestStations(input.value);
+    // 入力済みの駅名と完全に同じ1件だけなら出さない
+    if (!names.length || (names.length === 1 && names[0] === input.value.trim())) { close(); return; }
+    list.replaceChildren(...names.map((name) => {
+      const li = el('li', { role: 'option' }, name);
+      // mousedown で確定する：既定動作を止めて入力欄のフォーカスを保つので、blur で閉じるより先に確定が効く
+      li.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        input.value = name;
+        close();
+        render();
+      });
+      return li;
+    }));
+    list.hidden = false;
+  };
+  input.addEventListener('input', update);
+  input.addEventListener('focus', update);
+  input.addEventListener('blur', close);
+}
+
+// 見合わせ欄の summary 行：畳んだままでも見合わせ中の路線数が分かるようにする
+function updateSuspendSummary() {
+  $('suspend-summary').textContent = suspended.size ? `見合わせ路線（${suspended.size}件 見合わせ中）` : '見合わせ路線（なし）';
+}
+
+function buildToggles() {
+  const box = $('toggles');
+  for (const r of ROUTES) {
+    const input = el('input', { type: 'checkbox' });
+    const label = el('label', { class: 'toggle', title: `${r.name} が止まった` }, input, lineChip(r.id), r.short);
+    input.addEventListener('change', () => {
+      if (input.checked) suspended.add(r.id);
+      else suspended.delete(r.id);
+      label.classList.toggle('off', input.checked);
+      updateSuspendSummary();
+      render();
+    });
+    box.append(label);
+  }
+}
+
+// JOB15：データについて。事業者ごとの基準日と鮮度ヒント、モデル便の注記（時刻欄の注記と同じ文言を1か所から出す）
+const STALE_HINT = '今年のダイヤ改正が未反映の可能性があります';
+function buildAbout() {
+  $('freshness').replaceChildren(...freshnessList().map((f) => el('li', { 'data-operator': f.id },
+    `${f.name}：${fmtDate(f.asOf)}時点の運行を反映`,
+    f.stale ? el('span', { class: 'stale-hint' }, `（${STALE_HINT}）`) : null)));
+  $('about-model').textContent = MODEL_NOTE;
+}
+
+function renderStep(s) {
+  if (s.kind === 'walk') {
+    return el('li', { class: 'step walk' }, `徒歩連絡 ${s.from} → ${s.to}　${s.min}分`);
+  }
+  const dl = el('dl', {},
+    el('dt', {}, '種別'), el('dd', {}, typeSetLabel(s)),
+    el('dt', {}, '所要'), el('dd', {}, rideLabel(s)),
+    el('dt', {}, '間隔'), el('dd', {}, `${intervalLabel(s)}（${s.intervalBasis === 'yuto' ? '優等の合算' : '集合の合算'}）`),
+    s.localNote ? el('dt', {}, '各停系') : null, s.localNote ? el('dd', { class: 'local-note' }, localNoteLabel(s)) : null,
+    el('dt', {}, '両数'), el('dd', {}, carCountLabel(s)),
+  );
+  // 左端の縦バー：単一路線 leg はその路線色、コリドー leg（どちらの路線でもいい）は
+  // 2路線の色（各路線の先頭色）のたてしまのバー1本、直通 leg は縦2段のバー1本
+  const bar = s.through ? throughBar(s.through) : s.routes.length > 1 ? corridorBar(s.routes, 2) : lineSwatch('bar', s.routes[0], 2);
+  const bars = el('div', { class: 'bars' }, bar);
+  return el('li', { class: 'step rail' + (s.through ? ' through' : '') },
+    bars,
+    el('div', { class: 'step-body' },
+      el('div', { class: 'route' }, legRouteLabel(s), s.through ? el('small', { class: 'thru-note' }, throughNoteLabel(s)) : null),
+      el('div', { class: 'ft' }, `${s.from} → ${s.to}`),
+      dl,
+    ),
+  );
+}
+
+// JOB14：時刻の指定（空なら null＝従来のパターン表示）
+function timeQuery() {
+  const time = parseClock(timeInput.value);
+  if (time === undefined) return null;
+  return { time, mode: modeArr.checked ? 'arr' : 'dep' };
+}
+
+// JOB14：カードに載せる便の表示。「前の便」「次の便」は出発指定なら最初の leg、到着指定なら最後の leg の便をずらす
+function renderTrip(p, q, off) {
+  const box = el('div', { class: 'trip' });
+  const plan = (shift) => planTrips(p.steps, { ...q, shift, suspended: off });
+  let shift = 0;
+  const draw = () => {
+    const cur = plan(shift);
+    const nav = (label, cls, d) => {
+      const b = el('button', { type: 'button', class: cls }, label);
+      b.disabled = !cur.ok || !plan(shift + d).ok;
+      b.addEventListener('click', () => { shift += d; draw(); });
+      return b;
+    };
+    const buttons = el('div', { class: 'trip-nav' }, nav('前の便', 'trip-prev', -1), nav('次の便', 'trip-next', 1));
+    if (!cur.ok) {
+      box.replaceChildren(el('p', { class: 'trip-none' }, cur.reason), buttons);
+      return;
+    }
+    const total = el('div', { class: 'trip-total' }, `${fmtClock(cur.dep)}発 → ${fmtClock(cur.arr)}着`, el('small', {}, `（${fmtMin(cur.arr - cur.dep)}分）`));
+    const legs = el('ul', { class: 'trip-legs' }, ...cur.steps.map((s) => (s.kind === 'walk'
+      ? el('li', { class: 'trip-walk' }, `徒歩 ${s.from} ${fmtClock(s.dep)} → ${s.to} ${fmtClock(s.arr)}（${s.min}分）`)
+      : el('li', { class: 'trip-leg' }, `${s.from} ${fmtClock(s.dep)}発 → ${s.to} ${fmtClock(s.arr)}着`,
+        el('small', { class: 'trip-sys' }, `${s.routeName} ${s.type}`)))));
+    box.replaceChildren(total, legs, buttons);
+  };
+  draw();
+  return box;
+}
+
+function renderCard(p, q = null, off = []) {
+  const range = p.cost === p.costMax ? null : el('small', {}, `（〜${fmtMin(p.costMax)}分）`);
+  const walk = p.walks ? `＋徒歩連絡${p.walks}` : '';
+  const head = el('div', { class: 'card-head' },
+    el('span', { class: 'rank' }, `#${p.rank}`),
+    el('span', { class: 'cost' }, `約${fmtMin(Math.round(p.cost))}分`, range),
+    el('span', { class: 'xfer' }, `乗換${p.transfers}回${walk}`),
+  );
+  const steps = el('ul', { class: 'steps' }, ...p.steps.map(renderStep));
+  const deps = el('div', { class: 'deps' }, '依存路線: ',
+    ...p.dependsOn.map((rs) => el('span', { class: 'dep' },
+      ...rs.flatMap((r, i) => [i ? ' か ' : null, lineChip(r), routeShort(r)]))));
+  // 見出しが最速の変種のときは、基本形の所要を注記する
+  const baseNote = p.fastest === 'variant'
+    ? el('p', { class: 'base-cost' }, `基本形 約${fmtMin(Math.round(p.baseCost))}分（見出しは最速の変種）`)
+    : null;
+  const card = el('article', { class: 'card' }, head, q ? renderTrip(p, q, off) : null, baseNote, steps, deps);
+  if (p.variants.length) {
+    const list = el('ul', {}, ...p.variants.map((v) => el('li', {}, `約${fmtMin(Math.round(v.cost))}分${v.fastest ? '（最速）' : ''}: ${stepsText(v.steps)}`)));
+    card.append(el('details', {}, el('summary', {}, `変種 ${p.variants.length}件（コリドー内の乗り継ぎ違い）`), list));
+  }
+  return card;
+}
+
+// 入力値の確認。問題があればエラー文、なければ null
+function odError(origin, dest) {
+  const msgs = [];
+  for (const [label, v] of [['出発', origin], ['到着', dest]]) {
+    if (!v) msgs.push(`${label}駅を入力してください。`);
+    else if (!STATION_SET.has(v)) msgs.push(`データにない駅です（${label}：「${v}」）。候補から選んでください。`);
+  }
+  return msgs.length ? msgs.join(' ') : null;
+}
+
+function render() {
+  const origin = originInput.value.trim();
+  const dest = destInput.value.trim();
+  const results = $('results');
+  results.replaceChildren();
+  const q = timeQuery();
+  const when = q ? `　${fmtClock(q.time)}${q.mode === 'arr' ? '着' : '発'}` : '';
+  $('model-note').hidden = !q;
+  $('model-note').textContent = q ? MODEL_NOTE : '';
+  const error = odError(origin, dest);
+  $('od-error').textContent = error || '';
+  originInput.classList.toggle('invalid', !!origin && !STATION_SET.has(origin));
+  destInput.classList.toggle('invalid', !!dest && !STATION_SET.has(dest));
+  if (error) {
+    // 未登録駅・未入力のときは列挙しない
+    $('summary').textContent = '';
+    return;
+  }
+  if (origin === dest) {
+    $('summary').textContent = '';
+    results.append(el('p', { class: 'empty' }, '出発駅と到着駅が同じです。'));
+    return;
+  }
+  const res = enumeratePatterns(origin, dest, { suspended: [...suspended] });
+  const off = res.suspended.length ? `　見合わせ: ${res.suspended.map(routeShort).join('・')}` : '';
+  if (!res.patterns.length) {
+    $('summary').textContent = `${origin} → ${dest}${off}${when}`;
+    results.append(el('p', { class: 'empty' }, '残っているパターンがありません。'));
+    return;
+  }
+  $('summary').textContent = `${origin} → ${dest}　${res.patterns.length}パターン（最良 約${fmtMin(Math.round(res.best))}分・上限 約${fmtMin(Math.round(res.cap))}分）${off}${when}`;
+  // JOB14：時刻モードでもパターンの並び順は変えない（便はカードへの上乗せ）
+  results.append(...res.patterns.map((p) => renderCard(p, q, res.suspended)));
+}
+
+attachSuggest(originInput, $('origin-sugg'));
+attachSuggest(destInput, $('dest-sugg'));
+originInput.value = '船橋';
+destInput.value = '東京';
+buildToggles();
+updateSuspendSummary();
+buildAbout();
+// 入力の確定（候補の選択・Enter・フォーカスを外す）で検索する
+originInput.addEventListener('change', render);
+destInput.addEventListener('change', render);
+timeInput.addEventListener('change', render);
+$('mode-dep').addEventListener('change', render);
+modeArr.addEventListener('change', render);
+$('swap').addEventListener('click', () => {
+  [originInput.value, destInput.value] = [destInput.value, originInput.value];
+  render();
+});
+render();
+$('boot-error').classList.add('hidden');
+})();
+</script>
+<script>if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }</script>
+</body>
+</html>
